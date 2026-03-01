@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+
+# uv
+.python-version
+
+# Local data dirs (large files — never commit these)
+weather_cache/
+dem_cache/
+output/
+
+# Secrets — never commit
+.env
+*.env
+secrets.json
+kaggle.json
+service_account.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+PIPELINE_ARCHITECTURE.md
