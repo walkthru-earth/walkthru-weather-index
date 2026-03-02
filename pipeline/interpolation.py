@@ -13,10 +13,14 @@ bandwidth-selection practice for Nadaraya-Watson regression.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from pipeline.config import GPU_CHUNK_SIZE, PRECISION
 from pipeline.gpu import free_gpu_memory, gpu_available, to_numpy, xp
+
+log = logging.getLogger(__name__)
 
 
 def interpolate_to_points(
@@ -37,15 +41,30 @@ def interpolate_to_points(
         # Default epsilon = source grid spacing (0.25° for NOAA AI-NWP)
         eps = float(abs(src_lons[1] - src_lons[0])) if len(src_lons) > 1 else 0.25
 
+    T, Ny, Nx = data_3d.shape
+    N = len(tgt_lons)
+
     if gpu_available():
+        log.info(
+            "[INTERP] GPU kernel smoothing: %d ts x (%d,%d) grid -> %s pts (eps=%.3f, chunk=%d)",
+            T,
+            Ny,
+            Nx,
+            f"{N:,}",
+            eps,
+            chunk,
+        )
         return _kernel_smooth_gpu(
             data_3d, src_lons, src_lats, tgt_lons, tgt_lats, eps, chunk
         )
+    log.info(
+        "[INTERP] CPU bilinear: %d ts x (%d,%d) grid -> %s pts",
+        T,
+        Ny,
+        Nx,
+        f"{N:,}",
+    )
     return _bilinear_cpu(data_3d, src_lons, src_lats, tgt_lons, tgt_lats)
-
-
-# Keep old name as alias for backward compatibility
-rbf_interpolate = interpolate_to_points
 
 
 # ── GPU path: Nadaraya-Watson kernel regression ─────────────────────────────
@@ -80,7 +99,10 @@ def _kernel_smooth_gpu(
     data_flat = _xp.asarray(data_3d.reshape(T, S), dtype=dtype)
     out = _xp.zeros((T, N), dtype=dtype)
 
-    for i in range(0, N, chunk):
+    import cupy as cp
+
+    n_chunks = (N + chunk - 1) // chunk
+    for ci, i in enumerate(range(0, N, chunk)):
         j = min(i + chunk, N)
         tgt_chunk = _xp.asarray(
             np.column_stack([tgt_lons[i:j] * cos_lat, tgt_lats[i:j]]), dtype=dtype
@@ -96,9 +118,15 @@ def _kernel_smooth_gpu(
         out[:, i:j] = _xp.matmul(data_flat, weights.T)
 
         del diff, distances, weights, w_sum, tgt_chunk
-        import cupy as cp
-
         cp.cuda.Stream.null.synchronize()
+
+        if (ci + 1) % 500 == 0 or ci + 1 == n_chunks:
+            log.info(
+                "[INTERP] GPU chunk %d/%d (%.0f%%)",
+                ci + 1,
+                n_chunks,
+                100 * (ci + 1) / n_chunks,
+            )
 
     result = to_numpy(out)
     del data_flat, src_coords, out

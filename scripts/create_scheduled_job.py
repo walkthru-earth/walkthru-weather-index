@@ -34,7 +34,7 @@ cmd = [
     "--model",
     "GraphCast_GFS",
     "--h3-resolutions",
-    "5,7",
+    "5",
 ]
 if os.environ.get("BBOX"):
     cmd += ["--bbox", os.environ["BBOX"]]

@@ -21,9 +21,9 @@ WEATHER_PADDING: float = 2.0
 
 # ── H3 resolutions ────────────────────────────────────────────────────────────
 # Provide one or more; each resolution produces a separate parquet partition.
-# res 5 ≈ 253 km² (~533K cells globally)
-# res 7 ≈ 5 km²  (~26M cells globally)
-H3_RESOLUTIONS: list[int] = [5, 7]
+# res 5 ≈ 253 km² (~2M cells globally)
+# res 7 ≈ 5 km²  (~99M cells globally) — needs A10G-large (46 GB RAM)
+H3_RESOLUTIONS: list[int] = [5]
 
 # ── Pre-computed DEM terrain (H3-indexed Parquet) ────────────────────────────
 # Source Cooperative public bucket — no credentials needed.
