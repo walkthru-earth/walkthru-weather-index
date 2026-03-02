@@ -1,8 +1,8 @@
-name: 🔍 Detect new NOAA MLWP data
+name: Detect new NOAA MLWP data
 
 on:
   schedule:
-    # NOAA updates at ~00Z and ~12Z — check 75 min after each
+    # NOAA updates at ~00Z and ~12Z -- check 75 min after each
     - cron: "15 1  * * *"
     - cron: "15 13 * * *"
   workflow_dispatch:
@@ -22,33 +22,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # AWS CLI is pre-installed on ubuntu-latest — no extra install needed.
-      # noaa-oar-mlwp-data is a public bucket — --no-sign-request skips auth.
+      # AWS CLI is pre-installed on ubuntu-latest -- no extra install needed.
+      # noaa-oar-mlwp-data is a public bucket -- --no-sign-request skips auth.
 
-      - name: List all AI model prefixes on NOAA S3
+      - name: Find latest GraphCast_GFS file on NOAA S3
         id: list
         run: |
-          declare -A MODELS=(
-            [GraphCast_GFS]="GRAP_v100_GFS"
-            [GraphCast_IFS]="GRAP_v100_IFS"
-            [FourCastNet]="FOUR_v200_GFS"
-            [Pangu_Weather]="PANG_v100_GFS"
-          )
+          PREFIX="GRAP_v100_GFS"
 
-          rm -f /tmp/current_all.txt
+          aws s3 ls "s3://noaa-oar-mlwp-data/${PREFIX}/" \
+            --recursive \
+            --no-sign-request \
+            2>/dev/null \
+            | awk '{print $4}' \
+            | grep '\.nc$' \
+            | sort \
+            > /tmp/current.txt || true
 
-          for MODEL in "${!MODELS[@]}"; do
-            PREFIX="${MODELS[$MODEL]}"
-            aws s3 ls "s3://noaa-oar-mlwp-data/${PREFIX}/" \
-              --recursive \
-              --no-sign-request \
-              2>/dev/null \
-              | awk -v p="$PREFIX" '{print p"/"$4}' \
-              >> /tmp/current_all.txt || true
-          done
-
-          sort /tmp/current_all.txt -o /tmp/current_all.txt
-          LATEST=$(tail -1 /tmp/current_all.txt)
+          LATEST=$(tail -1 /tmp/current.txt)
           echo "latest=$LATEST" >> $GITHUB_OUTPUT
           echo "Latest file on S3: $LATEST"
 
@@ -63,11 +54,11 @@ jobs:
 
           if [ "$LAST" = "$LATEST" ] && [ "${{ inputs.force_run }}" != "true" ]; then
             echo "new=false" >> $GITHUB_OUTPUT
-            echo "✅ No new files — nothing to do."
+            echo "No new files -- nothing to do."
           else
             echo "new=true"         >> $GITHUB_OUTPUT
             echo "latest=$LATEST"   >> $GITHUB_OUTPUT
-            echo "🆕 New file detected: $LATEST"
+            echo "New file detected: $LATEST"
           fi
 
       - name: Update state file
