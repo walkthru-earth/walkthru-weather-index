@@ -85,7 +85,8 @@ def _get_duckdb(use_s3: bool) -> duckdb.DuckDBPyConnection:
             con.sql(f"SET s3_region='{aws_region}'")
             con.sql(f"SET s3_access_key_id='{aws_key}'")
             con.sql(f"SET s3_secret_access_key='{aws_secret}'")
-            log.info("[EXPORT]   S3 configured: region=%s", aws_region)
+            con.sql("SET s3_url_style='path'")
+            log.info("[EXPORT]   S3 configured: region=%s, url_style=path", aws_region)
 
     _duckdb_con = con
     return con
