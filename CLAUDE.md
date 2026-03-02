@@ -50,6 +50,7 @@ NOAA S3 (public) > GitHub Actions (polls 2x/day) > HuggingFace Jobs (A10G GPU)
 - **Default resolution**: `[5]` -- max 7 until res 8-10 Parquet files land, then bump `DEM_PARQUET_MAX_RES` in `config.py`.
 - **Progressive writes**: Each resolution is written to S3 immediately after interpolation, so partial results survive failures.
 - **Structured logging**: Uses Python `logging` module throughout (not print). Flushes per record for real-time HF Jobs log streaming.
+- **Native Parquet GEOMETRY**: DuckDB post-processes each Parquet partition to add `ST_Point(lon, lat)::GEOMETRY('EPSG:4326')` with per-row-group `BoundingBox` stats for spatial predicate pushdown. Rows sorted by `h3_index` for spatial locality (tight bounding boxes). Same pattern as [dem-terrain](https://github.com/walkthru-earth/dem-terrain).
 
 ## DEM terrain dataset
 

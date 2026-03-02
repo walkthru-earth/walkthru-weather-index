@@ -18,14 +18,20 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 
+import duckdb
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
 
 log = logging.getLogger(__name__)
+
+# Module-level lazy DuckDB connection (one per process).
+_duckdb_con: duckdb.DuckDBPyConnection | None = None
 
 
 _COLUMN_MAP = {
@@ -52,6 +58,119 @@ _COLUMN_MAP = {
     "geopotential_500hPa": "geopotential_500hPa_m",
     "geopotential_anomaly_500hPa": "geopotential_anomaly_500hPa_m",
 }
+
+
+def _get_duckdb(use_s3: bool) -> duckdb.DuckDBPyConnection:
+    """Lazy-init a DuckDB connection with spatial + httpfs extensions."""
+    global _duckdb_con  # noqa: PLW0603
+    if _duckdb_con is not None:
+        return _duckdb_con
+
+    log.info("[EXPORT] Initializing DuckDB %s", duckdb.__version__)
+    con = duckdb.connect()
+
+    for ext in ("spatial", "httpfs"):
+        try:
+            con.load_extension(ext)
+        except Exception:
+            con.install_extension(ext)
+            con.load_extension(ext)
+        log.info("[EXPORT]   Extension '%s' loaded", ext)
+
+    if use_s3:
+        aws_key = os.environ.get("AWS_ACCESS_KEY_ID", "")
+        aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+        aws_region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+        if aws_key and aws_secret:
+            con.sql(f"SET s3_region='{aws_region}'")
+            con.sql(f"SET s3_access_key_id='{aws_key}'")
+            con.sql(f"SET s3_secret_access_key='{aws_secret}'")
+            log.info("[EXPORT]   S3 configured: region=%s", aws_region)
+
+    _duckdb_con = con
+    return con
+
+
+def _s3_rename(src_key: str, dst_key: str) -> None:
+    """Atomic rename on S3 via copy + delete (boto3)."""
+    import boto3
+
+    s3 = boto3.client("s3")
+    # Keys come as "bucket/path" — split into bucket + key.
+    bucket, src = src_key.split("/", 1)
+    _, dst = dst_key.split("/", 1)
+    s3.copy_object(Bucket=bucket, CopySource=f"{bucket}/{src}", Key=dst)
+    s3.delete_object(Bucket=bucket, Key=src)
+
+
+def _add_geometry_to_partition(
+    base_dir: str,
+    model_name: str,
+    date_str: str,
+    hour_int: int,
+    res: int,
+    filesystem: object,
+    use_s3: bool,
+) -> None:
+    """Add native Parquet GEOMETRY column to each file in a partition directory.
+
+    DuckDB reads each Parquet file, adds ST_Point(lon, lat)::GEOMETRY('EPSG:4326'),
+    sorts by h3_index for spatial locality (tight per-row-group bounding boxes),
+    and writes back with ZSTD compression.
+    """
+    partition_dir = (
+        f"{base_dir}/model={model_name}/date={date_str}/hour={hour_int}/h3_res={res}"
+    )
+
+    from pyarrow.fs import FileSelector
+
+    try:
+        file_infos = filesystem.get_file_info(FileSelector(partition_dir))
+    except Exception as e:
+        log.warning("[EXPORT] Could not list partition dir %s: %s", partition_dir, e)
+        return
+
+    parquet_files = [
+        fi.path for fi in file_infos if fi.path.endswith(".parquet") and fi.size > 0
+    ]
+    if not parquet_files:
+        log.warning("[EXPORT] No parquet files found in %s", partition_dir)
+        return
+
+    con = _get_duckdb(use_s3)
+
+    for src_path in parquet_files:
+        t0 = time.time()
+
+        if use_s3:
+            read_path = f"s3://{src_path}"
+            tmp_path = f"s3://{src_path}.tmp"
+        else:
+            read_path = src_path
+            tmp_path = f"{src_path}.tmp"
+
+        con.sql(f"""
+            COPY (
+                SELECT *, ST_Point(lon, lat)::GEOMETRY('EPSG:4326') AS geometry
+                FROM read_parquet('{read_path}')
+                ORDER BY h3_index
+            ) TO '{tmp_path}'
+            (FORMAT PARQUET, COMPRESSION ZSTD, COMPRESSION_LEVEL 3,
+             ROW_GROUP_SIZE 100000)
+        """)
+
+        # Rename tmp -> original
+        if use_s3:
+            _s3_rename(src_path + ".tmp", src_path)
+        else:
+            Path(tmp_path).replace(src_path)
+
+        elapsed = time.time() - t0
+        log.info(
+            "[EXPORT]   geometry added to %s (%.1fs)",
+            src_path.rsplit("/", 1)[-1],
+            elapsed,
+        )
 
 
 def init_filesystem(
@@ -204,6 +323,13 @@ def write_resolution_to_s3(
         min_rows_per_group=50_000,
         max_rows_per_group=100_000,
         existing_data_behavior="overwrite_or_ignore",
+    )
+
+    # Add native Parquet GEOMETRY column via DuckDB post-processing.
+    # This adds ST_Point(lon, lat)::GEOMETRY('EPSG:4326') with per-row-group
+    # bounding box stats, and sorts by h3_index for spatial locality.
+    _add_geometry_to_partition(
+        base_dir, model_name, date_str, hour_int, res, filesystem, use_s3
     )
 
     uri = f"s3://{base_dir}" if use_s3 else base_dir
