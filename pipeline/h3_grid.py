@@ -19,21 +19,36 @@ def generate_h3_grid(
     Returns a dict mapping resolution → DataFrame with columns:
       h3_index, lat, lon, area_km2, resolution
     """
-    polygon = LatLngPoly(
-        [
-            (bbox["min_lat"], bbox["min_lon"]),
-            (bbox["min_lat"], bbox["max_lon"]),
-            (bbox["max_lat"], bbox["max_lon"]),
-            (bbox["max_lat"], bbox["min_lon"]),
-            (bbox["min_lat"], bbox["min_lon"]),
-        ]
-    )
+    is_global = (bbox["max_lat"] - bbox["min_lat"]) >= 170 and (
+        bbox["max_lon"] - bbox["min_lon"]
+    ) >= 350
 
     result: dict[int, pd.DataFrame] = {}
 
     for res in resolutions:
-        cells = list(h3.h3shape_to_cells(polygon, res))
+        if is_global:
+            # LatLngPoly cannot represent the full globe — use all base cells
+            # expanded to the target resolution instead.
+            cells = list(h3.uncompact_cells(h3.get_res0_cells(), res))
+        else:
+            polygon = LatLngPoly(
+                [
+                    (bbox["min_lat"], bbox["min_lon"]),
+                    (bbox["min_lat"], bbox["max_lon"]),
+                    (bbox["max_lat"], bbox["max_lon"]),
+                    (bbox["max_lat"], bbox["min_lon"]),
+                    (bbox["min_lat"], bbox["min_lon"]),
+                ]
+            )
+            cells = list(h3.h3shape_to_cells(polygon, res))
+
         print(f"   🔢 H3 res {res}: {len(cells):,} cells")
+
+        if not cells:
+            result[res] = pd.DataFrame(
+                columns=["h3_index", "lat", "lon", "area_km2", "resolution"]
+            )
+            continue
 
         # Vectorised lat/lon extraction
         latlng = np.array([h3.cell_to_latlng(c) for c in cells])
