@@ -157,7 +157,7 @@ def _add_geometry_to_partition(
                 ORDER BY h3_index
             ) TO '{tmp_path}'
             (FORMAT PARQUET, COMPRESSION ZSTD, COMPRESSION_LEVEL 3,
-             ROW_GROUP_SIZE 100000)
+             ROW_GROUP_SIZE 100000, GEOPARQUET_VERSION 'BOTH')
         """)
 
         # Rename tmp -> original
