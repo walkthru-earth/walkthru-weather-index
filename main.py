@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 from datetime import datetime, timezone
 
 import numpy as np
@@ -24,6 +25,19 @@ import numpy as np
 from pipeline import gpu as _gpu_mod
 
 log = logging.getLogger(__name__)
+
+
+def _parse_init_time(noaa_file: str | None) -> datetime | None:
+    """Extract the forecast initialization time from a NOAA filename.
+
+    Example: 'GRAP_v100_GFS_2026030200_f000_f240_06.nc' -> 2026-03-02 00:00 UTC
+    """
+    if not noaa_file:
+        return None
+    m = re.search(r"(\d{10})", noaa_file)
+    if not m:
+        return None
+    return datetime.strptime(m.group(1), "%Y%m%d%H").replace(tzinfo=timezone.utc)
 
 
 def _parse_bbox(raw: str) -> dict:
@@ -144,7 +158,9 @@ def main() -> None:
         s3_prefix=args.s3_prefix,
     )
 
-    run_time = datetime.now(tz=timezone.utc)
+    # Parse forecast init time from the NOAA filename (e.g. "...2026030200_f000...")
+    # so partitions use the model init hour, not wall-clock time.
+    run_time = _parse_init_time(args.noaa_file) or datetime.now(tz=timezone.utc)
 
     # -- Step 4: per-resolution loop: DEM -> interpolate -> write -> free ------
     from pipeline.dem import load_dem, load_dem_parquet
