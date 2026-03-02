@@ -151,6 +151,7 @@ s3://{S3_BUCKET}/{S3_PREFIX}/weather/
 | Row groups | 50k-100k rows |
 | Max file size | 500 000 rows (~128 MB) |
 | Statistics | Enabled (min/max on all columns) |
+| Geometry | Native Parquet 2.11+ GEOMETRY + GeoParquet 1.0 (`GEOPARQUET_VERSION 'BOTH'`) |
 
 ### Querying with DuckDB
 

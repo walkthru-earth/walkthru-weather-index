@@ -50,11 +50,11 @@ NOAA S3 (public) > GitHub Actions (polls 2x/day) > HuggingFace Jobs (A10G GPU)
 - **Default resolution**: `[5]` -- max 7 until res 8-10 Parquet files land, then bump `DEM_PARQUET_MAX_RES` in `config.py`.
 - **Progressive writes**: Each resolution is written to S3 immediately after interpolation, so partial results survive failures.
 - **Structured logging**: Uses Python `logging` module throughout (not print). Flushes per record for real-time HF Jobs log streaming.
-- **Native Parquet GEOMETRY**: DuckDB post-processes each Parquet partition to add `ST_Point(lon, lat)::GEOMETRY('EPSG:4326')` with per-row-group `BoundingBox` stats for spatial predicate pushdown. Rows sorted by `h3_index` for spatial locality (tight bounding boxes). Same pattern as [dem-terrain](https://github.com/walkthru-earth/dem-terrain).
+- **Native Parquet GEOMETRY**: DuckDB post-processes each Parquet partition with `GEOPARQUET_VERSION 'BOTH'` — writes native Parquet 2.11+ GEOMETRY logical type (per-row-group `geo_types` stats for spatial pushdown) AND GeoParquet 1.0 `geo` metadata for backwards compatibility. `ST_Point(lon, lat)::GEOMETRY('EPSG:4326')`, sorted by `h3_index` for spatial locality. Same pattern as [dem-terrain](https://github.com/walkthru-earth/dem-terrain).
 
 ## DEM terrain dataset
 
-Separate project at [walkthru-earth/dem-terrain](https://github.com/walkthru-earth/dem-terrain). Generates GEDTM-30m > H3 Parquet via DuckDB 1.5 with native Parquet 2.11+ GEOMETRY. Hosted on Source Cooperative (public, no auth).
+Separate project at [walkthru-earth/dem-terrain](https://github.com/walkthru-earth/dem-terrain). Generates GEDTM-30m > H3 Parquet via DuckDB 1.5 with `GEOPARQUET_VERSION 'BOTH'` (native Parquet 2.11+ GEOMETRY + GeoParquet 1.0). Hosted on Source Cooperative (public, no auth).
 
 - Res 1-7: uploaded and live
 - Res 8-10: processing, coming soon
