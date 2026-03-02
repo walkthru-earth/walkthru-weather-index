@@ -129,28 +129,54 @@ def write_resolution_to_s3(
         freq="6h",
     )
     N = len(h3_df)
+    total = T * N
 
-    rows: dict[str, list] = {
-        "h3_index": h3_df["h3_index"].tolist() * T,
-        "lat": h3_df["lat"].tolist() * T,
-        "lon": h3_df["lon"].tolist() * T,
-        "area_km2": h3_df["area_km2"].tolist() * T,
-        "timestamp": [ts for ts in timestamps for _ in range(N)],
-        "model": [model_name] * (T * N),
-        "date": [date_str] * (T * N),
-        "hour": [hour_int] * (T * N),
-        "h3_res": [res] * (T * N),
-    }
+    log.info(
+        "[EXPORT] Building table: %d ts x %s cells = %s rows",
+        T,
+        f"{N:,}",
+        f"{total:,}",
+    )
 
+    # Build PyArrow arrays directly from numpy to avoid Python list overhead.
+    # Python float objects are 28 bytes each vs 4 bytes in numpy float32.
+    # For 42M rows x 27 float columns, lists would use ~27 GB; numpy uses ~4.5 GB.
+    arrays: dict[str, pa.Array] = {}
+
+    # Grid metadata: tile N values T times (numpy arrays)
+    arrays["h3_index"] = pa.array(np.tile(h3_df["h3_index"].values, T))
+    arrays["lat"] = pa.array(
+        np.tile(h3_df["lat"].values.astype(np.float32), T), type=pa.float32()
+    )
+    arrays["lon"] = pa.array(
+        np.tile(h3_df["lon"].values.astype(np.float32), T), type=pa.float32()
+    )
+    arrays["area_km2"] = pa.array(
+        np.tile(h3_df["area_km2"].values.astype(np.float32), T), type=pa.float32()
+    )
+
+    # Timestamps: repeat each timestamp N times
+    arrays["timestamp"] = pa.array(
+        np.repeat(timestamps.values, N), type=pa.timestamp("s", tz="UTC")
+    )
+
+    # Partition columns
+    arrays["model"] = pa.array([model_name] * total, type=pa.string())
+    arrays["date"] = pa.array([date_str] * total, type=pa.string())
+    arrays["hour"] = pa.array(np.full(total, hour_int, dtype=np.uint8), type=pa.uint8())
+    arrays["h3_res"] = pa.array(np.full(total, res, dtype=np.uint8), type=pa.uint8())
+
+    # Weather variables: flatten numpy (T, N) -> (T*N,) with zero-copy to PyArrow
     for src_name, out_name in _COLUMN_MAP.items():
         arr = interpolated.get(src_name)
         if arr is None:
             continue
-        # arr shape: (T, N) -- flatten to (T*N,) in row-major order
-        flat = arr.flatten(order="C").astype(np.float32)
-        rows[out_name] = flat.tolist()
+        arrays[out_name] = pa.array(
+            arr.flatten(order="C").astype(np.float32), type=pa.float32()
+        )
 
-    table = pa.table({k: pa.array(v, type=_pa_type(k, v)) for k, v in rows.items()})
+    table = pa.table(arrays)
+    del arrays  # free the dict reference
 
     partition_schema = pa.schema(
         [
@@ -183,16 +209,3 @@ def write_resolution_to_s3(
     uri = f"s3://{base_dir}" if use_s3 else base_dir
     log.info("[EXPORT] res %d (%s rows) written to %s", res, f"{len(table):,}", uri)
     return uri
-
-
-# -- helpers -------------------------------------------------------------------
-
-
-def _pa_type(col: str, values: list):
-    if col in ("h3_index", "model", "date"):
-        return pa.string()
-    if col in ("h3_res", "hour"):
-        return pa.uint8()
-    if col == "timestamp":
-        return pa.timestamp("s", tz="UTC")
-    return pa.float32()

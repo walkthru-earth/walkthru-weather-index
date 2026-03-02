@@ -7,11 +7,28 @@
 ## Commands
 
 ```bash
+# Setup
 uv sync                               # Install deps (CPU)
 uv sync --extra gpu                   # Install deps (GPU)
-uv run ruff check .                   # Lint
-uv run ruff format .                  # Format
-uv run python main.py --no-gpu --h3-resolutions 5  # Local test
+
+# Lint & format (ALWAYS run before committing)
+uv run ruff check .                   # Lint all files
+uv run ruff format .                  # Format all files
+
+# Local test
+uv run python main.py --no-gpu --h3-resolutions 5
+
+# GitHub CLI -- trigger and monitor workflows
+gh workflow run trigger-hf-job.yml                    # Trigger pipeline
+gh run list --workflow=trigger-hf-job.yml             # List recent runs
+gh run watch <run-id>                                 # Watch live logs
+gh run view <run-id> --log                            # View completed logs
+
+# HuggingFace CLI -- monitor jobs
+hf jobs ps                                            # List all jobs
+hf jobs inspect <job-id>                              # Job details
+hf jobs logs <job-id>                                 # View logs
+hf jobs logs -f <job-id>                              # Stream logs live
 ```
 
 ## Architecture

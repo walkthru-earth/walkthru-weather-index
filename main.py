@@ -182,6 +182,14 @@ def main() -> None:
             reference_elevation=reference_elevation,
         )
 
+        # Free weather data before write (no longer needed after extraction)
+        if res == resolutions[-1]:
+            del weather_ds
+            import gc
+
+            gc.collect()
+            log.info("[LOAD] Weather data freed")
+
         # Write immediately
         write_resolution_to_s3(
             res=res,
