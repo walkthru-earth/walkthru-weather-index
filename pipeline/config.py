@@ -74,10 +74,6 @@ TOPO_PARAMS = {
 # Used as a sensible global default for anomaly computation.
 GEOPOTENTIAL_500_REF: float = 5574.0
 
-# ── GPU settings ──────────────────────────────────────────────────────────────
-GPU_CHUNK_SIZE = 512  # target points per RBF chunk (tune for VRAM)
-PRECISION = "float32"
-
 # ── Local dirs (used when running outside HF Jobs) ────────────────────────────
 CACHE_DIR = Path("weather_cache")
 OUTPUT_DIR = Path("output")
