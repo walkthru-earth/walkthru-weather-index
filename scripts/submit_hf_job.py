@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 HF_TOKEN = os.environ["HF_TOKEN"]
 SPACE_ID = os.environ.get("HF_SPACE_ID", "yharby/walkthru-weather-index")
-FLAVOR = os.environ.get("HF_JOB_FLAVOR", "a10g-small")
+FLAVOR = os.environ.get("HF_JOB_FLAVOR", "a10g-large")
 
 # Secrets forwarded into the HF container (encrypted at rest by HF)
 secrets = {
@@ -95,7 +95,7 @@ job = run_job(
     flavor=FLAVOR,
     secrets=secrets,
     env=env,
-    timeout="3h",
+    timeout="2h",
     token=HF_TOKEN,
 )
 

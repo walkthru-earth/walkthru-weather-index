@@ -22,7 +22,7 @@ on:
       flavor:
         description: "HF Jobs hardware flavor"
         required: false
-        default: "a10g-small"
+        default: "a10g-large"
 
 jobs:
   run-hf-job:
