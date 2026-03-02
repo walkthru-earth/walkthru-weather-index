@@ -37,7 +37,7 @@
 | `model` | string | e.g. `GraphCast_GFS` |
 | `date` | string | `YYYY-MM-DD` of run start |
 | `hour` | uint8 | Hour of run start (UTC) |
-| `h3_res` | uint8 | H3 resolution (5–10) |
+| `h3_res` | uint8 | H3 resolution (default: 5) |
 
 ### Weather columns — primary (after topographic correction)
 

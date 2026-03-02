@@ -2,7 +2,7 @@
 
 ## Project
 
-**walkthru-weather-index** — Event-driven weather downscaling pipeline: NOAA AI-NWP → H3 hexagonal grid → partitioned Parquet on S3.
+**walkthru-weather-index** -- Event-driven weather downscaling pipeline: NOAA AI-NWP > H3 hexagonal grid > partitioned Parquet on S3.
 
 ## Commands
 
@@ -17,32 +17,36 @@ uv run python main.py --no-gpu --h3-resolutions 5  # Local test
 ## Architecture
 
 ```
-NOAA S3 (public) → GitHub Actions (polls 2x/day) → HuggingFace Jobs (A10G GPU)
-                                                         │
-                    ┌────────────────────────────────────┘
-                    ▼
-    weather.py → h3_grid.py → dem.py → variables.py → export.py → S3 Parquet
+NOAA S3 (public) > GitHub Actions (polls 2x/day) > HuggingFace Jobs (A10G GPU)
+                                                         |
+                    +------------------------------------+
+                    v
+    weather.py > h3_grid.py > dem.py > variables.py > export.py > S3 Parquet
 ```
 
 ## Key design decisions
 
-- **DEM from Parquet (not STAC)**: `pipeline/dem.py` loads pre-computed H3-indexed terrain from Source Cooperative (`s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain/`). Resolutions 1–7 available. Falls back to STAC raster for res > 7 or with `--no-parquet-dem`.
-- **H3-native DEM**: When `dem["h3_native"]` is True, `corrections.py` skips `RegularGridInterpolator` entirely — values are already at cell centers.
+- **GPU bilinear interpolation**: `pipeline/interpolation.py` uses CuPy `map_coordinates` (order=1 bilinear, O(N) per timestep) on GPU, with scipy `RegularGridInterpolator` CPU fallback. Handles global longitude wrap-around via circular padding.
+- **DEM from Parquet (not STAC)**: `pipeline/dem.py` loads pre-computed H3-indexed terrain from Source Cooperative (`s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain/`). Source: [walkthru-earth/dem-terrain](https://github.com/walkthru-earth/dem-terrain). Resolutions 1-7 available. Falls back to STAC raster for res > 7 or with `--no-parquet-dem`.
+- **H3-native DEM**: When `dem["h3_native"]` is True, `corrections.py` skips `RegularGridInterpolator` entirely -- values are already at cell centers.
 - **Global H3 grids**: `h3_grid.py` uses `h3.uncompact_cells(get_res0_cells(), res)` for global bbox (LatLngPoly can't represent the full globe).
-- **Default resolutions**: `[5, 7]` — max 7 until res 8–10 Parquet files land, then bump `DEM_PARQUET_MAX_RES` in `config.py`.
+- **Default resolution**: `[5]` -- max 7 until res 8-10 Parquet files land, then bump `DEM_PARQUET_MAX_RES` in `config.py`.
+- **Progressive writes**: Each resolution is written to S3 immediately after interpolation, so partial results survive failures.
+- **Structured logging**: Uses Python `logging` module throughout (not print). Flushes per record for real-time HF Jobs log streaming.
 
 ## DEM terrain dataset
 
-Separate project at `../dem/` (or `walkthru-earth/dem-terrain` on GitHub). Generates GEDTM-30m → H3 Parquet via DuckDB 1.5 with native Parquet 2.11+ GEOMETRY. Hosted on Source Cooperative (public, no auth).
+Separate project at [walkthru-earth/dem-terrain](https://github.com/walkthru-earth/dem-terrain). Generates GEDTM-30m > H3 Parquet via DuckDB 1.5 with native Parquet 2.11+ GEOMETRY. Hosted on Source Cooperative (public, no auth).
 
-- Res 1–7: uploaded and live
-- Res 8–10: processing on Verda CPU node (360 vCPU, 1440 GB RAM), coming soon
+- Res 1-7: uploaded and live
+- Res 8-10: processing, coming soon
 - When ready: bump `DEM_PARQUET_MAX_RES` in `pipeline/config.py` and add res 8+ to defaults
 
 ## Deployment
 
-- **GitHub → HuggingFace**: code is pushed to both remotes. HF Space builds a Docker image.
+- **GitHub > HuggingFace**: code is pushed to both remotes. HF Space builds a Docker image.
 - **Trigger**: `gh workflow run trigger-hf-job.yml` or automatic via detect-new-data.yml schedule.
+- **Hardware**: a10g-large (A10G 24 GB, 12 vCPU, 46 GB RAM), 2h timeout.
 - **Monitor HF jobs**: `hf jobs ps`, `hf jobs inspect <id>`, `hf jobs logs <id>`
 - **AWS profile for Source Coop S3**: `sc-iam`
 
@@ -56,14 +60,14 @@ pipeline/
   weather.py                     NOAA S3 NetCDF download
   h3_grid.py                     H3 cell generation (global + regional)
   dem.py                         DEM loading (Parquet primary, STAC fallback)
-  interpolation.py               GPU Gaussian kernel / CPU bilinear interpolation
+  interpolation.py               GPU bilinear (CuPy map_coordinates) / CPU bilinear (scipy)
   corrections.py                 Topographic corrections (lapse rate, wind, precip, humidity)
   variables.py                   Variable extraction, unit conversion, derived quantities
-  export.py                      Hive-partitioned Parquet → S3
+  export.py                      Hive-partitioned Parquet > S3
 scripts/
   submit_hf_job.py               Submit one-shot HF Job
   create_scheduled_job.py        Register recurring HF schedule
 .github/workflows/
-  detect-new-data.yml            Poll NOAA S3 every 12h
+  detect-new-data.yml            Poll NOAA S3 every 12h (GraphCast_GFS only)
   trigger-hf-job.yml             Submit HF Job from GitHub Actions
 ```

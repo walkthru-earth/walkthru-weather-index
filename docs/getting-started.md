@@ -4,8 +4,8 @@
 
 | Tool | Version | Purpose |
 |---|---|---|
-| Python | ≥ 3.12 | Runtime |
-| [uv](https://docs.astral.sh/uv/) | ≥ 0.10 | Package management |
+| Python | >= 3.12 | Runtime |
+| [uv](https://docs.astral.sh/uv/) | >= 0.10 | Package management |
 | Git | any | Version control |
 | CUDA 12.x *(optional)* | 12.0+ | GPU acceleration via CuPy |
 
@@ -20,7 +20,7 @@ cd walkthru-weather-index
 # CPU only (local testing, orchestrator nodes)
 uv sync
 
-# GPU (HuggingFace Jobs / RunPod / Vast.ai)
+# GPU (HuggingFace Jobs)
 uv sync --extra gpu     # installs cupy-cuda12x
 ```
 
@@ -38,21 +38,21 @@ BBOX = {
 }
 
 # H3 resolutions to process (can be one or many)
-H3_RESOLUTIONS = [5, 7]
+H3_RESOLUTIONS = [5]
 
 # Extra degrees added to BBOX when loading source weather data.
-# Ensures all H3 cell centres are surrounded by source grid points → no NaN.
-# Rule: ≥ (H3_cell_diameter / 2) + model_grid_resolution
-# Default 2.0° is safe for all resolutions ≤ 9 with 0.25° model grids.
+# Ensures all H3 cell centres are surrounded by source grid points -> no NaN.
+# Rule: >= (H3_cell_diameter / 2) + model_grid_resolution
+# Default 2.0 deg is safe for all resolutions <= 9 with 0.25 deg model grids.
 WEATHER_PADDING = 2.0
 ```
 
 ### H3 resolution reference
 
-| Resolution | Cell area (km²) | Typical use |
+| Resolution | Cell area (km2) | Typical use |
 |---|---|---|
 | 3 | ~12 392 | Global overview |
-| 5 | ~253 | Continental / regional |
+| 5 | ~253 | Continental / regional (default) |
 | 7 | ~5 | City-level |
 | 9 | ~0.1 | Street-level |
 
@@ -70,7 +70,7 @@ cp .env.example .env
 |---|---|---|
 | `HF_TOKEN` | HF Jobs | HuggingFace write-access token |
 | `AWS_ACCESS_KEY_ID` | S3 output | Credentials for *your* output bucket |
-| `AWS_SECRET_ACCESS_KEY` | S3 output | — |
+| `AWS_SECRET_ACCESS_KEY` | S3 output | -- |
 | `AWS_DEFAULT_REGION` | S3 output | e.g. `us-east-1` |
 | `S3_BUCKET` | S3 output | Bare bucket name (no `s3://`, no trailing `/`) |
 | `S3_PREFIX` | S3 output | Key prefix inside the bucket (e.g. `indices/v1`); leave empty for root |
@@ -79,13 +79,13 @@ cp .env.example .env
 | `H3_RESOLUTIONS` | Optional | Override resolutions (default: from config.py) |
 | `BBOX` | Optional | `min_lat,max_lat,min_lon,max_lon` (default: global) |
 
-> **The NOAA input bucket (`noaa-oar-mlwp-data`) is public — no AWS credentials needed to read it.**
+> **The NOAA input bucket (`noaa-oar-mlwp-data`) is public -- no AWS credentials needed to read it.**
 
 ---
 
 ## Running locally
 
-### Minimal test (no GPU, no S3, 9 cells)
+### Minimal test (no GPU, no S3)
 
 ```bash
 uv run python main.py --no-gpu --h3-resolutions 5
@@ -96,7 +96,7 @@ Output is written to `./output/weather/model=.../`.
 ### Full local run with GPU
 
 ```bash
-uv run python main.py --h3-resolutions 7,9
+uv run python main.py --h3-resolutions 5
 ```
 
 ### Write to S3
@@ -104,7 +104,7 @@ uv run python main.py --h3-resolutions 7,9
 ```bash
 AWS_ACCESS_KEY_ID=xxx \
 AWS_SECRET_ACCESS_KEY=yyy \
-uv run python main.py --h3-resolutions 7,9 --s3-bucket my-bucket --s3-prefix my/prefix
+uv run python main.py --h3-resolutions 5 --s3-bucket my-bucket --s3-prefix my/prefix
 ```
 
 ### CLI arguments
@@ -112,7 +112,7 @@ uv run python main.py --h3-resolutions 7,9 --s3-bucket my-bucket --s3-prefix my/
 | Flag | Default | Description |
 |---|---|---|
 | `--model` | `GraphCast_GFS` | Model name (must match a key in `AI_MODELS`) |
-| `--h3-resolutions` | from `config.py` | Comma-separated list, e.g. `7,9` |
+| `--h3-resolutions` | from `config.py` | Comma-separated list, e.g. `5` or `5,7` |
 | `--bbox` | global | `min_lat,max_lat,min_lon,max_lon` |
 | `--s3-bucket` | `$S3_BUCKET` env | Output bucket; omit to write locally |
 | `--s3-prefix` | `$S3_PREFIX` env | Key prefix inside the bucket |
@@ -150,7 +150,7 @@ Visit [huggingface.co/jobs](https://huggingface.co/jobs) to see run status and l
 
 ## GitHub Actions setup
 
-Add these secrets to your GitHub repository (`Settings → Secrets → Actions`):
+Add these secrets to your GitHub repository (`Settings > Secrets > Actions`):
 
 | Secret | Description |
 |---|---|
@@ -161,4 +161,4 @@ Add these secrets to your GitHub repository (`Settings → Secrets → Actions`)
 | `S3_BUCKET` | Bare output bucket name |
 | `S3_PREFIX` | Key prefix inside bucket (leave empty for root) |
 
-The detector workflow (`.github/workflows/detect-new-data.yml`) runs twice daily, checks the public NOAA bucket for new files using `aws s3 ls --no-sign-request`, and triggers the pipeline only when a new file appears. No NOAA credentials are required.
+The detector workflow (`.github/workflows/detect-new-data.yml`) runs twice daily, checks the public NOAA bucket for new GraphCast_GFS files using `aws s3 ls --no-sign-request`, and triggers the pipeline only when a new file appears. No NOAA credentials are required.

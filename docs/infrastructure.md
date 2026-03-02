@@ -3,41 +3,41 @@
 ## Architecture overview
 
 ```
- ┌─────────────────────────────────────────────────────────────────┐
- │  GitHub (free)                                                  │
- │                                                                 │
- │  detect-new-data.yml          trigger-hf-job.yml               │
- │  ┌─────────────────┐          ┌──────────────────────────────┐  │
- │  │ cron: 01:15 UTC │          │ workflow_dispatch             │  │
- │  │ cron: 13:15 UTC │ ──────►  │ inputs: noaa_file, model     │  │
- │  │                 │          │                              │  │
- │  │ aws s3 ls       │          │ uv run submit_hf_job.py      │  │
- │  │ --no-sign-req   │          └──────────────┬───────────────┘  │
- │  └─────────────────┘                         │                  │
- └─────────────────────────────────────────────┼──────────────────┘
-                                               │ HuggingFace Hub API
-                                               ▼
- ┌─────────────────────────────────────────────────────────────────┐
- │  HuggingFace Jobs (GPU, pay-per-second)                         │
- │                                                                 │
- │  Image: pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel             │
- │  Flavor: a10g-small (A10G 24 GB, ~$1.00/hr)                     │
- │                                                                 │
- │  uv run python main.py                                          │
- │    → download NOAA NetCDF (public S3, no auth)                  │
- │    → load Copernicus DEM via STAC                               │
- │    → GPU RBF interpolation (CuPy)                               │
- │    → write partitioned Parquet → S3                             │
- └─────────────────────────────────────────────────────────────────┘
-                                               │
-                                               ▼
- ┌─────────────────────────────────────────────────────────────────┐
- │  S3 output bucket (your own)                                    │
- │                                                                 │
- │  s3://bucket/weather/                                           │
- │    model=GraphCast_GFS/date=2026-01-01/hour=0/h3_res=7/         │
- │      part-00000.parquet                                         │
- └─────────────────────────────────────────────────────────────────┘
+ +----------------------------------------------------------------+
+ |  GitHub (free)                                                  |
+ |                                                                 |
+ |  detect-new-data.yml          trigger-hf-job.yml               |
+ |  +-------------------+       +-----------------------------+   |
+ |  | cron: 01:15 UTC   |       | workflow_dispatch            |   |
+ |  | cron: 13:15 UTC   | ----> | inputs: noaa_file, model     |   |
+ |  |                   |       |                              |   |
+ |  | aws s3 ls         |       | uv run submit_hf_job.py      |   |
+ |  | --no-sign-req     |       +-------------+----------------+   |
+ |  +-------------------+                     |                    |
+ +--------------------------------------------+--------------------+
+                                              | HuggingFace Hub API
+                                              v
+ +----------------------------------------------------------------+
+ |  HuggingFace Jobs (GPU, pay-per-second)                        |
+ |                                                                 |
+ |  Image: nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04             |
+ |  Flavor: a10g-large (A10G 24 GB, 12 vCPU, 46 GB RAM)          |
+ |                                                                 |
+ |  uv run python main.py                                         |
+ |    -> download NOAA NetCDF (public S3, no auth)                |
+ |    -> load H3-indexed DEM from Source Cooperative Parquet       |
+ |    -> GPU bilinear interpolation (CuPy map_coordinates)        |
+ |    -> write partitioned Parquet -> S3                           |
+ +----------------------------------------------------------------+
+                                              |
+                                              v
+ +----------------------------------------------------------------+
+ |  S3 output bucket (your own)                                   |
+ |                                                                 |
+ |  s3://bucket/weather/                                          |
+ |    model=GraphCast_GFS/date=2026-01-01/hour=0/h3_res=5/       |
+ |      part-00000.parquet                                        |
+ +----------------------------------------------------------------+
 ```
 
 ---
@@ -53,11 +53,11 @@ NOAA publishes new AI-NWP model output approximately at 00Z and 12Z UTC, but the
 The detector (`detect-new-data.yml`) runs twice daily on a free GitHub-hosted runner:
 
 ```
-01:15 UTC  ← ~75 min after NOAA's 00Z target
-13:15 UTC  ← ~75 min after NOAA's 12Z target
+01:15 UTC  <- ~75 min after NOAA's 00Z target
+13:15 UTC  <- ~75 min after NOAA's 12Z target
 ```
 
-It lists all model prefixes in the public NOAA bucket (no credentials):
+It lists GraphCast_GFS files in the public NOAA bucket (no credentials):
 
 ```bash
 aws s3 ls s3://noaa-oar-mlwp-data/GRAP_v100_GFS/ \
@@ -76,17 +76,18 @@ The detector runs in ~10 seconds and costs nothing (free GitHub-hosted runners).
 
 ### Requirements
 
-- HuggingFace **PRO** account ($9/month) — required to use Jobs
+- HuggingFace **PRO** account ($9/month) -- required to use Jobs
 - A write-access HF token (`hf_...`) added to GitHub Secrets as `HF_TOKEN`
 
 ### Hardware flavors
 
-| Flavor | GPU | VRAM | $/hr | Recommended for |
-|---|---|---|---|---|
-| `t4-small` | T4 | 16 GB | $0.40 | Testing, res ≤ 7 |
-| `l4x1` | L4 | 24 GB | $0.80 | res ≤ 8 |
-| `a10g-small` | A10G | 24 GB | **$1.00** | **Default — res 7+9** |
-| `a100-large` | A100 | 80 GB | $2.50 | Global / res ≥ 9 |
+| Flavor | GPU | VRAM | RAM | $/hr | Notes |
+|---|---|---|---|---|---|
+| `t4-small` | T4 | 16 GB | 15 GB | $0.40 | Testing only |
+| `l4x1` | L4 | 24 GB | 30 GB | $0.80 | res <= 7 |
+| `a10g-small` | A10G | 24 GB | 15 GB | $1.00 | res 5 only (res 7 OOMs) |
+| **`a10g-large`** | **A10G** | **24 GB** | **46 GB** | **$1.50** | **Default -- global res 5** |
+| `a100-large` | A100 | 80 GB | 142 GB | $2.50 | Global res 7+ |
 
 ### One-off job
 
@@ -94,17 +95,17 @@ The detector runs in ~10 seconds and costs nothing (free GitHub-hosted runners).
 from huggingface_hub import run_job
 
 run_job(
-    repo_id = "yharby/walkthru-weather-index",
+    image   = "hf.co/spaces/yharby/walkthru-weather-index",
     command = ["uv", "run", "python", "main.py",
                "--model", "GraphCast_GFS",
-               "--h3-resolutions", "7,9"],
-    flavor  = "a10g-small",
+               "--h3-resolutions", "5"],
+    flavor  = "a10g-large",
     secrets = {
         "AWS_ACCESS_KEY_ID":     "...",
         "AWS_SECRET_ACCESS_KEY": "...",
         "S3_BUCKET":             "my-bucket",
     },
-    timeout = "3h",
+    timeout = "2h",
 )
 ```
 
@@ -114,18 +115,18 @@ run_job(
 from huggingface_hub import create_scheduled_job
 
 create_scheduled_job(
-    repo_id  = "yharby/walkthru-weather-index",
+    image    = "hf.co/spaces/yharby/walkthru-weather-index",
     command  = ["uv", "run", "python", "main.py",
                 "--model", "GraphCast_GFS",
-                "--h3-resolutions", "7,9"],
+                "--h3-resolutions", "5"],
     schedule = "0 1,13 * * *",   # 01:00 and 13:00 UTC daily
-    flavor   = "a10g-small",
+    flavor   = "a10g-large",
     secrets  = { ... },
-    timeout  = "3h",
+    timeout  = "2h",
 )
 ```
 
-The schedule is stored entirely on HuggingFace's side — no GitHub Actions cron needed for periodic runs. The GitHub Actions detector is still used for event-driven (new file) triggering.
+The schedule is stored entirely on HuggingFace's side -- no GitHub Actions cron needed for periodic runs. The GitHub Actions detector is still used for event-driven (new file) triggering.
 
 ---
 
@@ -147,7 +148,7 @@ s3://{S3_BUCKET}/{S3_PREFIX}/weather/
 | Setting | Value |
 |---|---|
 | Compression | ZSTD level 3 |
-| Row groups | 100 000 rows |
+| Row groups | 50k-100k rows |
 | Max file size | 500 000 rows (~128 MB) |
 | Statistics | Enabled (min/max on all columns) |
 
@@ -166,7 +167,7 @@ SELECT
     wind_speed_10m_ms,
     precipitation_mm_6hr
 FROM read_parquet(
-    's3://my-bucket/weather/model=GraphCast_GFS/date=2026-01-01/hour=0/h3_res=7/*.parquet'
+    's3://my-bucket/weather/model=GraphCast_GFS/date=2026-01-01/hour=0/h3_res=5/*.parquet'
 )
 ORDER BY timestamp, h3_index;
 
@@ -174,7 +175,7 @@ ORDER BY timestamp, h3_index;
 SELECT date, AVG(temperature_2m_C) AS mean_temp
 FROM read_parquet('s3://my-bucket/weather/**/*.parquet', hive_partitioning=true)
 WHERE model = 'GraphCast_GFS'
-  AND h3_res = 7
+  AND h3_res = 5
 GROUP BY date
 ORDER BY date;
 ```
@@ -197,7 +198,7 @@ dataset = ds.dataset(
 table = dataset.to_table(
     filter=(
         (ds.field("model")  == "GraphCast_GFS") &
-        (ds.field("h3_res") == 7) &
+        (ds.field("h3_res") == 5) &
         (ds.field("date")   >= "2026-01-01")
     ),
     columns=["h3_index", "timestamp", "temperature_2m_C",
@@ -214,7 +215,7 @@ df = table.to_pandas()
 |---|---|---|
 | `HF_TOKEN` | `trigger-hf-job.yml` | HuggingFace write-access token |
 | `AWS_ACCESS_KEY_ID` | `trigger-hf-job.yml` | Credentials for output S3 bucket |
-| `AWS_SECRET_ACCESS_KEY` | `trigger-hf-job.yml` | — |
+| `AWS_SECRET_ACCESS_KEY` | `trigger-hf-job.yml` | -- |
 | `AWS_DEFAULT_REGION` | `trigger-hf-job.yml` | e.g. `us-east-1` |
 | `S3_BUCKET` | `trigger-hf-job.yml` | Bare output bucket name |
 | `S3_PREFIX` | `trigger-hf-job.yml` | Key prefix inside the bucket (optional) |
@@ -225,11 +226,11 @@ df = table.to_pandas()
 
 ## Alternative compute backends
 
-See [PIPELINE_ARCHITECTURE.md](../PIPELINE_ARCHITECTURE.md) for full cost comparison. Quick reference:
+See [PIPELINE_ARCHITECTURE.md](../PIPELINE_ARCHITECTURE.md) for the full evaluation. Quick reference:
 
 | Backend | GPU | $/run (30 min) | Automation |
 |---|---|---|---|
-| **HF Jobs a10g-small** | A10G 24 GB | ~$0.50 | Native API + cron |
+| **HF Jobs a10g-large** | A10G 24 GB | ~$0.75 | Native API + cron |
 | RunPod RTX 4090 spot | RTX 4090 24 GB | ~$0.17 | REST API / OpenTofu |
 | Vast.ai A100 bid | A100 40 GB | ~$0.15 | REST API |
 | Kaggle (free) | T4 16 GB | $0.00 | `kaggle kernels push` |
