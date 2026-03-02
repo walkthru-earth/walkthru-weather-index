@@ -14,7 +14,7 @@ on:
       h3_resolutions:
         description: "Comma-separated H3 resolutions (e.g. 7,9)"
         required: false
-        default: "7,9"
+        default: "5,7"
       bbox:
         description: "Bounding box: min_lat,max_lat,min_lon,max_lon (empty = global)"
         required: false

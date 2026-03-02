@@ -14,6 +14,7 @@
 | [Weather Variables](variables.md) | Full reference of input variables, output columns, units |
 | [Infrastructure](infrastructure.md) | HuggingFace Jobs, GitHub Actions, S3 output schema, OpenTofu |
 | [Scientific Review](scientific-review.md) | Audit of all calculations against recent literature, corrections made, references |
+| [Global DEM Strategy](global-dem-strategy.md) | Comparison of approaches for global terrain data: H3 GeoParquet vs big COG vs distributed tiles |
 
 ---
 

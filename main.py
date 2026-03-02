@@ -3,7 +3,7 @@
 Environment variables (all optional — fall back to config.py defaults):
   NOAA_FILE        S3 key of the new .nc file (set by the detector workflow)
   MODEL_NAME       e.g. GraphCast_GFS  (default: GraphCast_GFS)
-  H3_RESOLUTIONS   comma-separated, e.g. 7,9  (default: from config.py)
+  H3_RESOLUTIONS   comma-separated, e.g. 5,7  (default: from config.py)
   BBOX             min_lat,max_lat,min_lon,max_lon  (default: global)
   S3_BUCKET        output bucket name (no s3:// prefix, no trailing slash)
   S3_PREFIX        key prefix inside the bucket (e.g. "indices/v1")
@@ -62,6 +62,11 @@ def main() -> None:
         help="Key prefix inside the S3 bucket (e.g. 'indices/v1')",
     )
     parser.add_argument("--no-gpu", action="store_true", help="Force CPU mode")
+    parser.add_argument(
+        "--no-parquet-dem",
+        action="store_true",
+        help="Force STAC raster DEM even when Parquet is available",
+    )
     args = parser.parse_args()
 
     # GPU status
@@ -105,21 +110,34 @@ def main() -> None:
     )
     print(f"   Region dims: {dict(weather_ds.sizes)}")
 
-    # ── Step 2: load DEM ──────────────────────────────────────────────────────
-    from pipeline.dem import load_dem
-
-    print("\n🏔️  Loading DEM …")
-    dem = load_dem(bbox=bbox)
-
-    # Compute reference elevation from mean of DEM
-    reference_elevation = float(np.nanmean(dem["elev"]))
-    print(f"   📏 Reference elevation: {reference_elevation:.0f} m (DEM mean)")
-
-    # ── Step 3: generate H3 grids ─────────────────────────────────────────────
+    # ── Step 2: generate H3 grids ─────────────────────────────────────────────
     from pipeline.h3_grid import generate_h3_grid
 
     print(f"\n🔢 Generating H3 grids for resolutions {resolutions} …")
     h3_grids = generate_h3_grid(bbox=bbox, resolutions=resolutions)
+
+    # ── Step 3: load DEM (per resolution from Parquet, or single raster) ─────
+    from pipeline.dem import load_dem, load_dem_parquet
+
+    dem_by_res: dict[int, dict] = {}
+    raster_dem = None  # lazy-loaded only if needed
+
+    for res in resolutions:
+        dem = None
+        if not args.no_parquet_dem:
+            dem = load_dem_parquet(h3_res=res, h3_df=h3_grids[res])
+        if dem is None:
+            # Fallback: load raster DEM once, reuse for all resolutions
+            if raster_dem is None:
+                print("\n🏔️  Loading raster DEM (STAC fallback) …")
+                raster_dem = load_dem(bbox=bbox)
+            dem = raster_dem
+        dem_by_res[res] = dem
+
+    # Compute reference elevation (mean across the first resolution's DEM)
+    first_dem = dem_by_res[resolutions[0]]
+    reference_elevation = float(np.nanmean(first_dem["elev"]))
+    print(f"   📏 Reference elevation: {reference_elevation:.0f} m (DEM mean)")
 
     # ── Step 4: interpolate variables for each resolution ────────────────────
     from pipeline.variables import extract_all
@@ -132,7 +150,7 @@ def main() -> None:
             ds=weather_ds,
             tgt_lats=h3_df["lat"].values,
             tgt_lons=h3_df["lon"].values,
-            dem=dem,
+            dem=dem_by_res[res],
             model_name=args.model,
             reference_elevation=reference_elevation,
         )

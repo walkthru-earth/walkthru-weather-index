@@ -38,7 +38,7 @@ BBOX = {
 }
 
 # H3 resolutions to process (can be one or many)
-H3_RESOLUTIONS = [7, 9]
+H3_RESOLUTIONS = [5, 7]
 
 # Extra degrees added to BBOX when loading source weather data.
 # Ensures all H3 cell centres are surrounded by source grid points → no NaN.
@@ -118,6 +118,7 @@ uv run python main.py --h3-resolutions 7,9 --s3-bucket my-bucket --s3-prefix my/
 | `--s3-prefix` | `$S3_PREFIX` env | Key prefix inside the bucket |
 | `--noaa-file` | latest on S3 | Specific S3 key to process |
 | `--no-gpu` | off | Force CPU mode (numpy + scipy) |
+| `--no-parquet-dem` | off | Force STAC raster DEM even when Parquet is available |
 
 ---
 

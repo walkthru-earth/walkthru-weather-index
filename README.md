@@ -44,7 +44,7 @@ cp .env.example .env
 uv run python main.py --no-gpu --h3-resolutions 5
 
 # 4. Run with GPU + S3 output
-uv run python main.py --h3-resolutions 7,9 \
+uv run python main.py --h3-resolutions 5,7 \
   --s3-bucket your-bucket --s3-prefix your/prefix
 
 # 5. Submit a one-off HF Job
@@ -131,11 +131,13 @@ Configure in `pipeline/config.py` → `H3_RESOLUTIONS` or via `--h3-resolutions 
 | `--s3-prefix` | `$S3_PREFIX` env | Key prefix inside the bucket |
 | `--noaa-file` | latest on S3 | Specific S3 key to process |
 | `--no-gpu` | off | Force CPU mode (numpy + scipy) |
+| `--no-parquet-dem` | off | Force STAC raster DEM (skip Parquet) |
 
 ## DEM sources
 
-1. **Copernicus GLO-30** via Microsoft Planetary Computer (primary)
-2. **OpenLandMap merged 30 m DEM** via `stac.openlandmap.org` (fallback)
+1. **Pre-computed H3 Parquet** on [Source Cooperative](https://source.coop/walkthru-earth/dem-terrain) (primary) — terrain derivatives already at H3 cell centres, res 1–7
+2. **Copernicus GLO-30** via Microsoft Planetary Computer (fallback for res > 7)
+3. **OpenLandMap merged 30 m DEM** via `stac.openlandmap.org` (fallback #2)
 
 ## Documentation
 
@@ -147,6 +149,7 @@ Configure in `pipeline/config.py` → `H3_RESOLUTIONS` or via `--h3-resolutions 
 | [Weather Variables](docs/variables.md) | Full reference of input variables, output columns, units |
 | [Infrastructure](docs/infrastructure.md) | HuggingFace Jobs, GitHub Actions, S3 output schema |
 | [Scientific Review](docs/scientific-review.md) | Audit of all calculations against recent literature |
+| [Global DEM Strategy](docs/global-dem-strategy.md) | Approaches for scaling terrain data globally |
 
 ## License
 

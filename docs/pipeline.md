@@ -55,12 +55,23 @@ Without padding, a 0.5° BBOX on a 0.25° grid gives only 2×2 = 4 source points
 
 ### Source priority
 
-1. **Copernicus GLO-30** via Microsoft Planetary Computer STAC (primary)
-2. **OpenLandMap merged 30 m DEM** via `stac.openlandmap.org` (automatic fallback)
+1. **Pre-computed H3 Parquet** on Source Cooperative (primary) — terrain derivatives already computed at H3 cell centres, loaded per resolution. No interpolation, no GPU work.
+2. **Copernicus GLO-30** via Microsoft Planetary Computer STAC (fallback for resolutions > 7 or when Parquet is unavailable)
+3. **OpenLandMap merged 30 m DEM** via `stac.openlandmap.org` (fallback #2)
 
-### Terrain derivatives computed on GPU
+### H3 Parquet path (default)
 
-All derivatives are computed in a single GPU pass immediately after loading:
+For resolutions 1–7, the pipeline reads pre-computed terrain from:
+
+```
+s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain/h3_res={res}/data.parquet
+```
+
+Each file contains `h3_index, elev, slope, aspect, tri, tpi` already at H3 cell centres. The pipeline joins on `h3_index` to align DEM values with the H3 grid — no raster loading, no GPU terrain computation, no `RegularGridInterpolator`. This reduces the DEM step from ~30 min to ~5 sec for global runs.
+
+### STAC raster fallback
+
+When Parquet is unavailable (resolution > 7, or `--no-parquet-dem` flag), the pipeline falls back to the original STAC flow. All derivatives are computed in a single GPU pass:
 
 | Output | Computation |
 |---|---|

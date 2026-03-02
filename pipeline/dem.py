@@ -1,21 +1,94 @@
-"""DEM loading with full GPU processing.
+"""DEM loading — pre-computed H3 Parquet (primary) or STAC raster (fallback).
 
-Primary source  : Copernicus GLO-30 via Microsoft Planetary Computer STAC
-Fallback source : openlandmap merged 30 m DEM (stac.openlandmap.org)
+Primary source  : H3-indexed Parquet on Source Cooperative (public, no auth)
+Fallback source : Copernicus GLO-30 via Microsoft Planetary Computer STAC
+Fallback #2     : openlandmap merged 30 m DEM (stac.openlandmap.org)
 """
 
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
-from pipeline.config import BBOX
+from pipeline.config import (
+    BBOX,
+    DEM_PARQUET_BASE,
+    DEM_PARQUET_MAX_RES,
+    DEM_PARQUET_REGION,
+)
 from pipeline.gpu import to_device, to_numpy, xp, xp_ndimage
 
 
-def load_dem(bbox: dict = BBOX, resolution: float | None = None) -> dict:
-    """Load DEM and compute terrain derivatives on GPU (or CPU).
+def load_dem_parquet(h3_res: int, h3_df: pd.DataFrame) -> dict | None:
+    """Load pre-computed terrain from H3-indexed Parquet on S3.
 
-    When *resolution* is None it is auto-computed to target ~2000×2000 pixels.
+    Returns a dict with 1D arrays matching the order of *h3_df*, plus
+    ``h3_native=True`` so downstream code skips RegularGridInterpolator.
+
+    Returns None if the resolution is not available as Parquet.
+    """
+    if h3_res > DEM_PARQUET_MAX_RES:
+        return None
+
+    url = f"{DEM_PARQUET_BASE}/h3_res={h3_res}/data.parquet"
+    print(f"🏔️  Loading DEM from Parquet (H3 res {h3_res}) …")
+
+    try:
+        import pyarrow.parquet as pq
+        from pyarrow.fs import S3FileSystem
+
+        fs = S3FileSystem(region=DEM_PARQUET_REGION, anonymous=True)
+        # Strip the s3:// scheme for PyArrow
+        s3_path = url.removeprefix("s3://")
+        dem_table = pq.read_table(
+            s3_path,
+            filesystem=fs,
+            columns=["h3_index", "elev", "slope", "aspect", "tri", "tpi"],
+        )
+        dem_df = dem_table.to_pandas()
+    except Exception as e:
+        print(f"   ⚠️  Parquet load failed: {e}")
+        return None
+
+    # Join on h3_index to align DEM values with the pipeline's H3 grid
+    merged = h3_df[["h3_index"]].merge(dem_df, on="h3_index", how="left")
+
+    n_total = len(merged)
+    n_matched = merged["elev"].notna().sum()
+    n_missing = n_total - n_matched
+
+    if n_matched == 0:
+        print("   ⚠️  No matching H3 cells in Parquet — falling back to STAC")
+        return None
+
+    # Fill missing terrain values (ocean cells not in the DEM dataset)
+    for col in ("elev", "slope", "aspect", "tri", "tpi"):
+        merged[col] = merged[col].fillna(0.0)
+
+    print(
+        f"   ✅ DEM Parquet: {n_matched:,}/{n_total:,} cells matched"
+        f"  elev {merged['elev'].min():.0f}–{merged['elev'].max():.0f} m"
+        f"  slope max {merged['slope'].max():.1f}°"
+    )
+    if n_missing > 0:
+        print(f"   ℹ️  {n_missing:,} ocean/missing cells filled with 0")
+
+    return {
+        "h3_native": True,
+        "elev": merged["elev"].values.astype(np.float32),
+        "slope": merged["slope"].values.astype(np.float32),
+        "aspect": merged["aspect"].values.astype(np.float32),
+        "tri": merged["tri"].values.astype(np.float32),
+        "tpi": merged["tpi"].values.astype(np.float32),
+        "lat": h3_df["lat"].values,
+        "lon": h3_df["lon"].values,
+    }
+
+
+def load_dem(bbox: dict = BBOX, resolution: float | None = None) -> dict:
+    """Load DEM raster and compute terrain derivatives on GPU (or CPU).
+
+    When *resolution* is None it is auto-computed to target ~2000x2000 pixels.
 
     Returns a dict with keys: elev, lat, lon, slope, aspect, tri, tpi, dx, dy.
     All array values are numpy (CPU) arrays — GPU tensors are only used
@@ -40,7 +113,7 @@ def load_dem(bbox: dict = BBOX, resolution: float | None = None) -> dict:
         "max_lon": min(bbox["max_lon"] + buffer, 180.0),
     }
 
-    print("🏔️  Loading DEM …")
+    print("🏔️  Loading DEM from STAC (raster fallback) …")
 
     dem_ds = _load_from_planetary_computer(dem_bbox, resolution)
 
@@ -74,16 +147,9 @@ def load_dem(bbox: dict = BBOX, resolution: float | None = None) -> dict:
     slope = _xp.arctan(_xp.sqrt(dz_dx**2 + dz_dy**2)) * 180 / _xp.pi
     aspect = (_xp.arctan2(-dz_dx, -dz_dy) * 180 / _xp.pi + 360) % 360
 
-    # TRI: Riley et al. (1999) — RMS of elevation differences between
-    # center cell and each neighbor in a 3×3 window.
-    # Compute sum of squared differences via convolution identity:
-    #   Σ(z_i - z_c)² = Σz_i² - 2·z_c·Σz_i + 9·z_c²
-    #                 = conv(z², ones) - 2·z·conv(z, ones) + 9·z²
     kernel_ones = _xp.ones((3, 3), dtype=_xp.float32)
     sum_z2 = _ndi.convolve(elev_gpu**2, kernel_ones, mode="nearest")
     sum_z = _ndi.convolve(elev_gpu, kernel_ones, mode="nearest")
-    # 9 neighbors including center; subtract center contribution for pure Riley
-    # But Riley (1999) includes the center in the sum, so keep all 9 terms
     tri = _xp.sqrt(_xp.maximum(sum_z2 - 2 * elev_gpu * sum_z + 9 * elev_gpu**2, 0) / 9)
 
     tpi = elev_gpu - _ndi.uniform_filter(elev_gpu, size=5, mode="nearest")

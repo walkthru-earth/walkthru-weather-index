@@ -20,8 +20,8 @@ def apply(
     if correction_type == "none":
         return data
 
-    elev = _interp_dem(dem["lat"], dem["lon"], dem["elev"], tgt_lats, tgt_lons)
-    slop = _interp_dem(dem["lat"], dem["lon"], dem["slope"], tgt_lats, tgt_lons)
+    elev = interp_dem_field(dem, "elev", tgt_lats, tgt_lons)
+    slop = interp_dem_field(dem, "slope", tgt_lats, tgt_lons)
     dz = elev - reference_elevation
 
     if correction_type == "wind_elevation":
@@ -44,7 +44,14 @@ def interp_dem_field(
     tgt_lats: np.ndarray,
     tgt_lons: np.ndarray,
 ) -> np.ndarray:
-    """Interpolate a single DEM field onto target points (public helper)."""
+    """Interpolate a single DEM field onto target points (public helper).
+
+    For H3-native DEM dicts (``dem["h3_native"] is True``), values are already
+    at target H3 cell centres — return them directly without interpolation.
+    """
+    if dem.get("h3_native"):
+        return dem[field].astype(np.float32)
+
     return _interp_dem(dem["lat"], dem["lon"], dem[field], tgt_lats, tgt_lons)
 
 
