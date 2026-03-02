@@ -37,4 +37,6 @@ RUN uv run python -c "import duckdb; con = duckdb.connect(); con.install_extensi
 # Smoke-test imports at build time
 RUN uv run python -c "from pipeline import config, gpu, h3_grid; print('imports OK')"
 
-CMD ["uv", "run", "python", "main.py"]
+# Default: idle health endpoint on port 7860 so the Space stays "Running"
+# without executing the pipeline.  HF Jobs override CMD with main.py.
+CMD ["python3", "-c", "from http.server import HTTPServer, BaseHTTPRequestHandler\nHTTPServer(('', 7860), BaseHTTPRequestHandler).serve_forever()"]
