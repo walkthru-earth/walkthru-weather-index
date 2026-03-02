@@ -21,7 +21,7 @@
  |  HuggingFace Jobs (GPU, pay-per-second)                        |
  |                                                                 |
  |  Image: nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04             |
- |  Flavor: a10g-small (A10G 24 GB, 12 vCPU, 46 GB RAM)          |
+ |  Flavor: a10g-large (A10G 24 GB, 12 vCPU, 46 GB RAM)          |
  |                                                                 |
  |  uv run python main.py                                         |
  |    -> download NOAA NetCDF (public S3, no auth)                |
@@ -86,7 +86,7 @@ The detector runs in ~10 seconds and costs nothing (free GitHub-hosted runners).
 | `t4-small` | T4 | 16 GB | 15 GB | $0.40 | Testing only |
 | `l4x1` | L4 | 24 GB | 30 GB | $0.80 | res <= 7 |
 | `a10g-small` | A10G | 24 GB | 15 GB | $1.00 | res 5 only (res 7 OOMs) |
-| **`a10g-small`** | **A10G** | **24 GB** | **46 GB** | **$1.50** | **Default -- global res 5** |
+| **`a10g-large`** | **A10G** | **24 GB** | **46 GB** | **$1.50** | **Default -- global res 5** |
 | `a100-large` | A100 | 80 GB | 142 GB | $2.50 | Global res 7+ |
 
 ### One-off job
@@ -99,7 +99,7 @@ run_job(
     command = ["uv", "run", "python", "main.py",
                "--model", "GraphCast_GFS",
                "--h3-resolutions", "5"],
-    flavor  = "a10g-small",
+    flavor  = "a10g-large",
     secrets = {
         "AWS_ACCESS_KEY_ID":     "...",
         "AWS_SECRET_ACCESS_KEY": "...",
@@ -120,7 +120,7 @@ create_scheduled_job(
                 "--model", "GraphCast_GFS",
                 "--h3-resolutions", "5"],
     schedule = "0 1,13 * * *",   # 01:00 and 13:00 UTC daily
-    flavor   = "a10g-small",
+    flavor   = "a10g-large",
     secrets  = { ... },
     timeout  = "2h",
 )
@@ -231,7 +231,7 @@ See [PIPELINE_ARCHITECTURE.md](../PIPELINE_ARCHITECTURE.md) for the full evaluat
 
 | Backend | GPU | $/run (30 min) | Automation |
 |---|---|---|---|
-| **HF Jobs a10g-small** | A10G 24 GB | ~$0.75 | Native API + cron |
+| **HF Jobs a10g-large** | A10G 24 GB | ~$0.75 | Native API + cron |
 | RunPod RTX 4090 spot | RTX 4090 24 GB | ~$0.17 | REST API / OpenTofu |
 | Vast.ai A100 bid | A100 40 GB | ~$0.15 | REST API |
 | Kaggle (free) | T4 16 GB | $0.00 | `kaggle kernels push` |

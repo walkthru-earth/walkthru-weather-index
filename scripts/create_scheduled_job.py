@@ -59,7 +59,7 @@ job = create_scheduled_job(
     image=f"hf.co/spaces/{SPACE_ID}",
     command=cmd,
     schedule="0 1,13 * * *",  # 01:00 and 13:00 UTC (1h after NOAA 00Z/12Z updates)
-    flavor="a10g-small",  # A10G 24 GB, 4 vCPU, 15 GB RAM
+    flavor="a10g-large",  # A10G 24 GB, 12 vCPU, 46 GB RAM
     secrets=secrets,
     env={"PYTHONUNBUFFERED": "1"},
     timeout="2h",
@@ -69,5 +69,5 @@ job = create_scheduled_job(
 log.info("Scheduled job created")
 log.info("  ID      : %s", job.id)
 log.info("  Schedule: 0 1,13 * * * UTC")
-log.info("  Flavor  : a10g-small")
+log.info("  Flavor  : a10g-large")
 log.info("  URL     : https://huggingface.co/jobs")

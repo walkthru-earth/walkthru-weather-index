@@ -5,7 +5,7 @@ Required env vars:
 
 Optional env vars (forwarded as job secrets/env):
   HF_SPACE_ID       -- e.g. yharby/walkthru-weather-index (default)
-  HF_JOB_FLAVOR     -- hardware flavor (default: a10g-small)
+  HF_JOB_FLAVOR     -- hardware flavor (default: a10g-large)
   NOAA_FILE         -- S3 key of the new .nc file
   MODEL_NAME        -- e.g. GraphCast_GFS
   H3_RESOLUTIONS    -- e.g. 5,7
@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 HF_TOKEN = os.environ["HF_TOKEN"]
 SPACE_ID = os.environ.get("HF_SPACE_ID", "yharby/walkthru-weather-index")
-FLAVOR = os.environ.get("HF_JOB_FLAVOR", "a10g-small")
+FLAVOR = os.environ.get("HF_JOB_FLAVOR", "a10g-large")
 
 # Secrets forwarded into the HF container (encrypted at rest by HF)
 secrets = {

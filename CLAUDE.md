@@ -65,7 +65,7 @@ Separate project at [walkthru-earth/dem-terrain](https://github.com/walkthru-ear
 - **GitHub > HuggingFace**: code is pushed to both remotes. HF Space builds the Docker image only (idle CMD); Jobs override CMD to run the pipeline.
 - **Trigger**: `gh workflow run trigger-hf-job.yml` or automatic via detect-new-data.yml schedule.
 - **Partitioning**: `model={name}/date={YYYY-MM-DD}/hour={HH}/h3_res={res}` -- hour is parsed from the NOAA filename init time (e.g. `2026030200` → `hour=0`), not wall-clock.
-- **Hardware**: a10g-small (A10G 24 GB, 4 vCPU, 15 GB RAM), 2h timeout.
+- **Hardware**: a10g-large (A10G 24 GB, 12 vCPU, 46 GB RAM), 2h timeout.
 - **Monitor HF jobs**: `hf jobs ps`, `hf jobs inspect <id>`, `hf jobs logs <id>`
 - **AWS profile for Source Coop S3**: `sc-iam`
 
