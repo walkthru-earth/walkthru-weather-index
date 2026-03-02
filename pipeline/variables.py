@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import xarray as xr
 
 from pipeline.config import AI_MODELS, GEOPOTENTIAL_500_REF, TOPO_PARAMS
 from pipeline.corrections import apply as topo_apply, interp_dem_field
 from pipeline.interpolation import interpolate_to_points
+
+log = logging.getLogger(__name__)
 
 # variable key → (output_name, correction_type, unit_conversion, pressure_level_index)
 VARIABLE_SPEC: dict[str, tuple[str, str, str, int | None]] = {
@@ -54,16 +58,16 @@ def extract_all(
     # Model-specific variable exclusions
     skip_vars = set(AI_MODELS.get(model_name, {}).get("skip_vars", []))
     if skip_vars:
-        print(f"   ℹ️  Skipping variables not available in {model_name}: {skip_vars}")
+        log.info("[SKIP] Variables not available in %s: %s", model_name, skip_vars)
 
     # Validate pressure level dimension ordering
     if "level" in ds.dims:
         levels = ds.level.values
-        print(f"   ℹ️  Pressure levels: {levels}")
+        log.info("Pressure levels: %s", levels)
 
     for key, (name, correction, units, level_idx) in VARIABLE_SPEC.items():
         if key in skip_vars:
-            print(f"   ⏭️  {name}: skipped (not available in {model_name})")
+            log.info("[SKIP] %s: not available in %s", name, model_name)
             continue
 
         var = _find_var(ds, key)
@@ -81,7 +85,7 @@ def extract_all(
         interp = _convert_units(interp, units)
 
         results[name] = interp
-        print(f"   ✅ {name}: {interp.shape[0]} ts × {interp.shape[1]} pts")
+        log.info("[INTERP] %s: %d ts x %d pts", name, interp.shape[0], interp.shape[1])
 
     # Compute variable lapse rate BEFORE applying lapse rate correction
     _apply_variable_lapse_rate(results, tgt_lats, tgt_lons, dem, reference_elevation)
@@ -162,14 +166,13 @@ def _apply_variable_lapse_rate(
         # Clamp to physically plausible range: -9.8 to +5 °C/km
         gamma = np.clip(gamma, -9.8 / 1000.0, 5.0 / 1000.0)
         correction = gamma * dz[None, :]
-        print(
-            f"   ℹ️  Variable lapse rate: mean Γ = {np.nanmean(gamma) * 1000:.1f} °C/km"
-        )
+        log.info("Variable lapse rate: mean = %.1f C/km", np.nanmean(gamma) * 1000)
     else:
         # Fallback to fixed ISA lapse rate (no slope enhancement — lacks literature basis)
         correction = (TOPO_PARAMS["temp_lapse_rate"] / 1000.0) * dz[None, :]
-        print(
-            f"   ℹ️  Fixed lapse rate: Γ = {TOPO_PARAMS['temp_lapse_rate']:.1f} °C/km (T_850 unavailable)"
+        log.info(
+            "Fixed lapse rate: %.1f C/km (T_850 unavailable)",
+            TOPO_PARAMS["temp_lapse_rate"],
         )
 
     results["temperature_2m"] = t2m + correction

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 import h3
 from h3 import LatLngPoly
 
 from pipeline.config import BBOX, H3_RESOLUTIONS
+
+log = logging.getLogger(__name__)
 
 
 def generate_h3_grid(
@@ -42,7 +46,7 @@ def generate_h3_grid(
             )
             cells = list(h3.h3shape_to_cells(polygon, res))
 
-        print(f"   🔢 H3 res {res}: {len(cells):,} cells")
+        log.info("[H3] res %d: %s cells", res, f"{len(cells):,}")
 
         if not cells:
             result[res] = pd.DataFrame(

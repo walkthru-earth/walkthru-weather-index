@@ -11,11 +11,12 @@ Partition scheme:
 The S3_PREFIX env var (or --s3-prefix CLI arg) controls the key prefix inside the
 bucket.  Set it when IAM credentials are scoped to a specific prefix.
 
-No local temp files are written — PyArrow streams directly via multipart upload.
+No local temp files are written -- PyArrow streams directly via multipart upload.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -23,6 +24,8 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
+
+log = logging.getLogger(__name__)
 
 
 _COLUMN_MAP = {
@@ -51,30 +54,14 @@ _COLUMN_MAP = {
 }
 
 
-def write_to_s3(
-    h3_grids: dict[int, pd.DataFrame],
-    interpolated: dict[int, dict[str, np.ndarray]],
-    model_name: str,
+def init_filesystem(
     s3_bucket: str,
     s3_prefix: str = "",
-    run_time: datetime | None = None,
-) -> str:
-    """Write all resolutions to S3.  Returns the S3 base URI written to.
+) -> tuple[object, str, bool]:
+    """Set up S3 or local filesystem for writing. Called once per run.
 
-    Parameters
-    ----------
-    s3_bucket : str
-        Bare bucket name (no ``s3://`` scheme, no trailing slash).
-    s3_prefix : str
-        Key prefix inside the bucket (e.g. ``"indices/v1"``).  Useful when
-        IAM credentials are scoped to a specific prefix.
+    Returns (filesystem, base_dir, use_s3).
     """
-    if run_time is None:
-        run_time = datetime.now(tz=timezone.utc)
-
-    date_str = run_time.strftime("%Y-%m-%d")
-    hour_int = int(run_time.strftime("%H"))
-
     use_s3 = bool(s3_bucket and s3_bucket != "output")
 
     if use_s3:
@@ -85,10 +72,11 @@ def write_to_s3(
                 region=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
             )
         except Exception as e:
-            print(f"   ⚠️  S3FileSystem unavailable ({e}), writing locally instead.")
+            log.warning("S3FileSystem unavailable (%s), writing locally instead.", e)
             use_s3 = False
             filesystem = None
-    else:
+
+    if not use_s3:
         from pyarrow.fs import LocalFileSystem
 
         filesystem = LocalFileSystem()
@@ -102,56 +90,67 @@ def write_to_s3(
         parts.append("weather")
         base_dir = "/".join(parts)
     else:
-        base_dir = "output/weather"
-
-    if not use_s3:
         import pathlib
 
+        base_dir = "output/weather"
         pathlib.Path(base_dir).mkdir(parents=True, exist_ok=True)
 
-    all_tables = []
-    for res, h3_df in h3_grids.items():
-        vars_for_res = interpolated.get(res, {})
-        if not vars_for_res:
+    log.info(
+        "[EXPORT] Filesystem ready: %s", f"s3://{base_dir}" if use_s3 else base_dir
+    )
+    return filesystem, base_dir, use_s3
+
+
+def write_resolution_to_s3(
+    res: int,
+    h3_df: pd.DataFrame,
+    interpolated: dict[str, np.ndarray],
+    model_name: str,
+    filesystem: object,
+    base_dir: str,
+    use_s3: bool,
+    run_time: datetime | None = None,
+) -> str | None:
+    """Write a single resolution immediately. Returns the URI written to, or None."""
+    if not interpolated:
+        log.warning("[EXPORT] No data to write for res %d", res)
+        return None
+
+    if run_time is None:
+        run_time = datetime.now(tz=timezone.utc)
+
+    date_str = run_time.strftime("%Y-%m-%d")
+    hour_int = int(run_time.strftime("%H"))
+
+    T = next(iter(interpolated.values())).shape[0]
+    timestamps = pd.date_range(
+        start=run_time.replace(minute=0, second=0, microsecond=0),
+        periods=T,
+        freq="6h",
+    )
+    N = len(h3_df)
+
+    rows: dict[str, list] = {
+        "h3_index": h3_df["h3_index"].tolist() * T,
+        "lat": h3_df["lat"].tolist() * T,
+        "lon": h3_df["lon"].tolist() * T,
+        "area_km2": h3_df["area_km2"].tolist() * T,
+        "timestamp": [ts for ts in timestamps for _ in range(N)],
+        "model": [model_name] * (T * N),
+        "date": [date_str] * (T * N),
+        "hour": [hour_int] * (T * N),
+        "h3_res": [res] * (T * N),
+    }
+
+    for src_name, out_name in _COLUMN_MAP.items():
+        arr = interpolated.get(src_name)
+        if arr is None:
             continue
+        # arr shape: (T, N) -- flatten to (T*N,) in row-major order
+        flat = arr.flatten(order="C").astype(np.float32)
+        rows[out_name] = flat.tolist()
 
-        T = next(iter(vars_for_res.values())).shape[0]
-        timestamps = pd.date_range(
-            start=run_time.replace(minute=0, second=0, microsecond=0),
-            periods=T,
-            freq="6h",
-        )
-        N = len(h3_df)
-
-        rows: dict[str, list] = {
-            "h3_index": h3_df["h3_index"].tolist() * T,
-            "lat": h3_df["lat"].tolist() * T,
-            "lon": h3_df["lon"].tolist() * T,
-            "area_km2": h3_df["area_km2"].tolist() * T,
-            "timestamp": [ts for ts in timestamps for _ in range(N)],
-            "model": [model_name] * (T * N),
-            "date": [date_str] * (T * N),
-            "hour": [hour_int] * (T * N),
-            "h3_res": [res] * (T * N),
-        }
-
-        for src_name, out_name in _COLUMN_MAP.items():
-            arr = vars_for_res.get(src_name)
-            if arr is None:
-                continue
-            # arr shape: (T, N) — flatten to (T*N,) in row-major order
-            flat = arr.flatten(order="C").astype(np.float32)
-            rows[out_name] = flat.tolist()
-
-        all_tables.append(
-            pa.table({k: pa.array(v, type=_pa_type(k, v)) for k, v in rows.items()})
-        )
-
-    if not all_tables:
-        print("   ⚠️  No data to write.")
-        return base_dir
-
-    combined = pa.concat_tables(all_tables)
+    table = pa.table({k: pa.array(v, type=_pa_type(k, v)) for k, v in rows.items()})
 
     partition_schema = pa.schema(
         [
@@ -169,7 +168,7 @@ def write_to_s3(
     )
 
     ds.write_dataset(
-        combined,
+        table,
         base_dir=base_dir,
         filesystem=filesystem,
         format=ds.ParquetFileFormat(),
@@ -182,11 +181,11 @@ def write_to_s3(
     )
 
     uri = f"s3://{base_dir}" if use_s3 else base_dir
-    print(f"   ✅ Written → {uri}")
+    log.info("[EXPORT] res %d (%s rows) written to %s", res, f"{len(table):,}", uri)
     return uri
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+# -- helpers -------------------------------------------------------------------
 
 
 def _pa_type(col: str, values: list):

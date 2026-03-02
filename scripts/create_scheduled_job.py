@@ -4,16 +4,23 @@ Run this once locally after setting your HF_TOKEN:
 
   uv run python scripts/create_scheduled_job.py
 
-The schedule is stored on HuggingFace's side — no cron or GitHub Actions
+The schedule is stored on HuggingFace's side -- no cron or GitHub Actions
 needed for the timing. The NOAA detector (detect-new-data.yml) is still
 used for event-driven runs; this script is for the periodic fallback.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 
 from huggingface_hub import create_scheduled_job
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s  %(message)s",
+)
+log = logging.getLogger(__name__)
 
 HF_TOKEN = os.environ["HF_TOKEN"]
 SPACE_ID = os.environ.get("HF_SPACE_ID", "yharby/walkthru-weather-index")
@@ -27,7 +34,7 @@ cmd = [
     "--model",
     "GraphCast_GFS",
     "--h3-resolutions",
-    "7,9",
+    "5,7",
 ]
 if os.environ.get("BBOX"):
     cmd += ["--bbox", os.environ["BBOX"]]
@@ -54,12 +61,13 @@ job = create_scheduled_job(
     schedule="0 1,13 * * *",  # 01:00 and 13:00 UTC (1h after NOAA 00Z/12Z updates)
     flavor="a10g-small",  # A10G 24 GB
     secrets=secrets,
+    env={"PYTHONUNBUFFERED": "1"},
     timeout="3h",
     token=HF_TOKEN,
 )
 
-print("✅ Scheduled job created")
-print(f"   ID      : {job.id}")
-print("   Schedule: 0 1,13 * * * UTC")
-print("   Flavor  : a10g-small")
-print("   URL     : https://huggingface.co/jobs")
+log.info("Scheduled job created")
+log.info("  ID      : %s", job.id)
+log.info("  Schedule: 0 1,13 * * * UTC")
+log.info("  Flavor  : a10g-small")
+log.info("  URL     : https://huggingface.co/jobs")

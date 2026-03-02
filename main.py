@@ -1,6 +1,6 @@
-"""Pipeline entrypoint — used by HuggingFace Jobs, Kaggle kernels, and local runs.
+"""Pipeline entrypoint -- used by HuggingFace Jobs, Kaggle kernels, and local runs.
 
-Environment variables (all optional — fall back to config.py defaults):
+Environment variables (all optional -- fall back to config.py defaults):
   NOAA_FILE        S3 key of the new .nc file (set by the detector workflow)
   MODEL_NAME       e.g. GraphCast_GFS  (default: GraphCast_GFS)
   H3_RESOLUTIONS   comma-separated, e.g. 5,7  (default: from config.py)
@@ -14,13 +14,16 @@ Environment variables (all optional — fall back to config.py defaults):
 
 from __future__ import annotations
 
-import os
 import argparse
+import logging
+import os
 from datetime import datetime, timezone
 
 import numpy as np
 
 from pipeline import gpu as _gpu_mod
+
+log = logging.getLogger(__name__)
 
 
 def _parse_bbox(raw: str) -> dict:
@@ -39,7 +42,12 @@ def _parse_bbox(raw: str) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="NOAA MLWP → H3 Parquet pipeline")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s  %(message)s",
+    )
+
+    parser = argparse.ArgumentParser(description="NOAA MLWP -> H3 Parquet pipeline")
     parser.add_argument("--noaa-file", default=os.environ.get("NOAA_FILE"))
     parser.add_argument(
         "--model", default=os.environ.get("MODEL_NAME", "GraphCast_GFS")
@@ -69,14 +77,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Create local dirs
+    from pipeline.config import ensure_dirs
+
+    ensure_dirs()
+
     # GPU status
     if not args.no_gpu:
-        print(f"🎮 GPU available : {_gpu_mod.gpu_available()}")
+        log.info("[GPU] GPU available: %s", _gpu_mod.gpu_available())
     else:
         import pipeline.gpu as gm
 
         gm._GPU = False
-        print("🖥️  Running in CPU mode (--no-gpu flag set)")
+        log.info("[CPU] Running in CPU mode (--no-gpu flag set)")
 
     # Resolve BBOX
     from pipeline.config import BBOX as DEFAULT_BBOX
@@ -85,9 +98,12 @@ def main() -> None:
         bbox = _parse_bbox(args.bbox)
     else:
         bbox = DEFAULT_BBOX
-    print(
-        f"🗺️  BBOX: lat {bbox['min_lat']:.1f}→{bbox['max_lat']:.1f}, "
-        f"lon {bbox['min_lon']:.1f}→{bbox['max_lon']:.1f}"
+    log.info(
+        "BBOX: lat %.1f-%.1f, lon %.1f-%.1f",
+        bbox["min_lat"],
+        bbox["max_lat"],
+        bbox["min_lon"],
+        bbox["max_lon"],
     )
 
     # Resolve H3 resolutions
@@ -97,82 +113,92 @@ def main() -> None:
         resolutions = [int(r.strip()) for r in args.h3_resolutions.split(",")]
     else:
         resolutions = DEFAULT_RESOLUTIONS
-    print(f"🔢 H3 resolutions : {resolutions}")
+    log.info("H3 resolutions: %s", resolutions)
 
-    # ── Step 1: load weather data ─────────────────────────────────────────────
+    # -- Step 1: load weather data ---------------------------------------------
     from pipeline.weather import load_weather
 
-    print(f"\n📦 Loading weather data  [{args.model}] …")
+    log.info("[LOAD] Loading weather data [%s]", args.model)
     weather_ds, nc_path = load_weather(
         model_name=args.model,
         s3_key=args.noaa_file or None,
         bbox=bbox,
     )
-    print(f"   Region dims: {dict(weather_ds.sizes)}")
+    log.info("Region dims: %s", dict(weather_ds.sizes))
 
-    # ── Step 2: generate H3 grids ─────────────────────────────────────────────
+    # -- Step 2: generate H3 grids ---------------------------------------------
     from pipeline.h3_grid import generate_h3_grid
 
-    print(f"\n🔢 Generating H3 grids for resolutions {resolutions} …")
+    log.info("[H3] Generating grids for resolutions %s", resolutions)
     h3_grids = generate_h3_grid(bbox=bbox, resolutions=resolutions)
 
-    # ── Step 3: load DEM (per resolution from Parquet, or single raster) ─────
+    # -- Step 3: init export filesystem ----------------------------------------
+    from pipeline.export import init_filesystem, write_resolution_to_s3
+
+    s3_bucket = args.s3_bucket
+    if not s3_bucket:
+        log.warning("No S3 bucket set -- writing locally to ./output/")
+
+    filesystem, base_dir, use_s3 = init_filesystem(
+        s3_bucket=s3_bucket or "output",
+        s3_prefix=args.s3_prefix,
+    )
+
+    run_time = datetime.now(tz=timezone.utc)
+
+    # -- Step 4: per-resolution loop: DEM -> interpolate -> write -> free ------
     from pipeline.dem import load_dem, load_dem_parquet
-
-    dem_by_res: dict[int, dict] = {}
-    raster_dem = None  # lazy-loaded only if needed
-
-    for res in resolutions:
-        dem = None
-        if not args.no_parquet_dem:
-            dem = load_dem_parquet(h3_res=res, h3_df=h3_grids[res])
-        if dem is None:
-            # Fallback: load raster DEM once, reuse for all resolutions
-            if raster_dem is None:
-                print("\n🏔️  Loading raster DEM (STAC fallback) …")
-                raster_dem = load_dem(bbox=bbox)
-            dem = raster_dem
-        dem_by_res[res] = dem
-
-    # Compute reference elevation (mean across the first resolution's DEM)
-    first_dem = dem_by_res[resolutions[0]]
-    reference_elevation = float(np.nanmean(first_dem["elev"]))
-    print(f"   📏 Reference elevation: {reference_elevation:.0f} m (DEM mean)")
-
-    # ── Step 4: interpolate variables for each resolution ────────────────────
     from pipeline.variables import extract_all
 
-    interpolated_by_res: dict[int, dict] = {}
+    raster_dem = None  # lazy-loaded only if needed
+    reference_elevation: float | None = None
 
-    for res, h3_df in h3_grids.items():
-        print(f"\n🔄 Interpolating → H3 res {res}  ({len(h3_df):,} cells) …")
-        interpolated_by_res[res] = extract_all(
+    for res in resolutions:
+        h3_df = h3_grids[res]
+
+        # Load DEM for this resolution
+        dem = None
+        if not args.no_parquet_dem:
+            dem = load_dem_parquet(h3_res=res, h3_df=h3_df)
+        if dem is None:
+            if raster_dem is None:
+                log.info("[DEM] Loading raster DEM (STAC fallback)")
+                raster_dem = load_dem(bbox=bbox)
+            dem = raster_dem
+
+        # Compute reference elevation once from the first resolution's DEM
+        if reference_elevation is None:
+            reference_elevation = float(np.nanmean(dem["elev"]))
+            log.info("Reference elevation: %.0f m (DEM mean)", reference_elevation)
+
+        # Interpolate
+        log.info("[INTERP] H3 res %d (%s cells)", res, f"{len(h3_df):,}")
+        interpolated = extract_all(
             ds=weather_ds,
             tgt_lats=h3_df["lat"].values,
             tgt_lons=h3_df["lon"].values,
-            dem=dem_by_res[res],
+            dem=dem,
             model_name=args.model,
             reference_elevation=reference_elevation,
         )
 
-    # ── Step 5: export to S3 ──────────────────────────────────────────────────
-    from pipeline.export import write_to_s3
+        # Write immediately
+        write_resolution_to_s3(
+            res=res,
+            h3_df=h3_df,
+            interpolated=interpolated,
+            model_name=args.model,
+            filesystem=filesystem,
+            base_dir=base_dir,
+            use_s3=use_s3,
+            run_time=run_time,
+        )
 
-    s3_bucket = args.s3_bucket
-    if not s3_bucket:
-        print("\n⚠️  No S3 bucket set — writing locally to ./output/")
+        # Free memory before next resolution
+        del dem, interpolated
 
-    print(f"\n💾 Writing partitioned Parquet {'to S3' if s3_bucket else 'locally'} …")
-    uri = write_to_s3(
-        h3_grids=h3_grids,
-        interpolated=interpolated_by_res,
-        model_name=args.model,
-        s3_bucket=s3_bucket or "output",
-        s3_prefix=args.s3_prefix,
-        run_time=datetime.now(tz=timezone.utc),
-    )
-
-    print(f"\n🎉 Done!  Output → {uri}")
+    uri = f"s3://{base_dir}" if use_s3 else base_dir
+    log.info("[DONE] Output: %s", uri)
 
 
 if __name__ == "__main__":

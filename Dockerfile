@@ -2,7 +2,8 @@
 # Base: nvidia/cuda on Ubuntu 24.04 (ships Python 3.12 natively)
 FROM nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

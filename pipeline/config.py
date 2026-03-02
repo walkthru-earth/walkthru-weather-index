@@ -83,5 +83,8 @@ CACHE_DIR = Path("weather_cache")
 OUTPUT_DIR = Path("output")
 DEM_CACHE = Path("dem_cache")
 
-for _d in (CACHE_DIR, OUTPUT_DIR, DEM_CACHE):
-    _d.mkdir(parents=True, exist_ok=True)
+
+def ensure_dirs() -> None:
+    """Create local cache/output directories (call from main, not at import time)."""
+    for d in (CACHE_DIR, OUTPUT_DIR, DEM_CACHE):
+        d.mkdir(parents=True, exist_ok=True)

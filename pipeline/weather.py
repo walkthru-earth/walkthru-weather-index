@@ -5,6 +5,7 @@ Public bucket — no credentials required (--no-sign-request / UNSIGNED).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import xarray as xr
@@ -22,6 +23,8 @@ from pipeline.config import (
 )
 
 _UNSIGNED_CFG = Config(signature_version=UNSIGNED)
+
+log = logging.getLogger(__name__)
 
 
 def _s3() -> boto3.client:
@@ -75,12 +78,14 @@ def load_weather(
     nc_path = cache_dir / filename
 
     if not nc_path.exists():
-        print(f"   📥 Downloading {s3_key} …")
+        log.info("[LOAD] Downloading %s", s3_key)
         _evict_old_cache(cache_dir, code)
         _s3().download_file(S3_BUCKET, s3_key, str(nc_path))
-        print(f"   ✅ Saved → {nc_path.name}  ({nc_path.stat().st_size:,} bytes)")
+        log.info(
+            "[LOAD] Saved %s (%s bytes)", nc_path.name, f"{nc_path.stat().st_size:,}"
+        )
     else:
-        print(f"   📦 Using cache: {nc_path.name}")
+        log.info("[LOAD] Using cache: %s", nc_path.name)
 
     ds = xr.open_dataset(nc_path, engine="h5netcdf")
 
@@ -95,7 +100,7 @@ def load_weather(
         if levels[0] < levels[-1]:
             # Levels are ascending (50→1000 hPa from top-of-atmosphere) — reverse
             ds = ds.sortby("level", ascending=False)
-        print(f"   ℹ️  Pressure levels ({len(ds.level)}): {ds.level.values.tolist()}")
+        log.info("Pressure levels (%d): %s", len(ds.level), ds.level.values.tolist())
 
     # For global bbox, skip clipping (use full dataset).
     # Otherwise clip to region of interest + padding.
@@ -113,12 +118,14 @@ def load_weather(
             latitude=slice(padded["min_lat"], padded["max_lat"]),
             longitude=slice(padded["min_lon"], padded["max_lon"]),
         )
-    print(
-        f"   🗺️  Source region: "
-        f"lat {region.latitude.values[0]:.2f}→{region.latitude.values[-1]:.2f} "
-        f"({len(region.latitude)} pts)  "
-        f"lon {region.longitude.values[0]:.2f}→{region.longitude.values[-1]:.2f} "
-        f"({len(region.longitude)} pts)"
+    log.info(
+        "[LOAD] Source region: lat %.2f-%.2f (%d pts)  lon %.2f-%.2f (%d pts)",
+        region.latitude.values[0],
+        region.latitude.values[-1],
+        len(region.latitude),
+        region.longitude.values[0],
+        region.longitude.values[-1],
+        len(region.longitude),
     )
 
     # Limit to forecast window

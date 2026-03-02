@@ -7,6 +7,8 @@ Fallback #2     : openlandmap merged 30 m DEM (stac.openlandmap.org)
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
@@ -17,6 +19,8 @@ from pipeline.config import (
     DEM_PARQUET_REGION,
 )
 from pipeline.gpu import to_device, to_numpy, xp, xp_ndimage
+
+log = logging.getLogger(__name__)
 
 
 def load_dem_parquet(h3_res: int, h3_df: pd.DataFrame) -> dict | None:
@@ -31,7 +35,7 @@ def load_dem_parquet(h3_res: int, h3_df: pd.DataFrame) -> dict | None:
         return None
 
     url = f"{DEM_PARQUET_BASE}/h3_res={h3_res}/data.parquet"
-    print(f"🏔️  Loading DEM from Parquet (H3 res {h3_res}) …")
+    log.info("[DEM] Loading from Parquet (H3 res %d)", h3_res)
 
     try:
         import pyarrow.parquet as pq
@@ -47,7 +51,7 @@ def load_dem_parquet(h3_res: int, h3_df: pd.DataFrame) -> dict | None:
         )
         dem_df = dem_table.to_pandas()
     except Exception as e:
-        print(f"   ⚠️  Parquet load failed: {e}")
+        log.warning("Parquet load failed: %s", e)
         return None
 
     # Join on h3_index to align DEM values with the pipeline's H3 grid
@@ -58,20 +62,23 @@ def load_dem_parquet(h3_res: int, h3_df: pd.DataFrame) -> dict | None:
     n_missing = n_total - n_matched
 
     if n_matched == 0:
-        print("   ⚠️  No matching H3 cells in Parquet — falling back to STAC")
+        log.warning("No matching H3 cells in Parquet -- falling back to STAC")
         return None
 
     # Fill missing terrain values (ocean cells not in the DEM dataset)
     for col in ("elev", "slope", "aspect", "tri", "tpi"):
         merged[col] = merged[col].fillna(0.0)
 
-    print(
-        f"   ✅ DEM Parquet: {n_matched:,}/{n_total:,} cells matched"
-        f"  elev {merged['elev'].min():.0f}–{merged['elev'].max():.0f} m"
-        f"  slope max {merged['slope'].max():.1f}°"
+    log.info(
+        "[DEM] Parquet: %s/%s cells matched  elev %s-%s m  slope max %.1f deg",
+        f"{n_matched:,}",
+        f"{n_total:,}",
+        f"{merged['elev'].min():.0f}",
+        f"{merged['elev'].max():.0f}",
+        merged["slope"].max(),
     )
     if n_missing > 0:
-        print(f"   ℹ️  {n_missing:,} ocean/missing cells filled with 0")
+        log.info("[DEM] %s ocean/missing cells filled with 0", f"{n_missing:,}")
 
     return {
         "h3_native": True,
@@ -113,12 +120,12 @@ def load_dem(bbox: dict = BBOX, resolution: float | None = None) -> dict:
         "max_lon": min(bbox["max_lon"] + buffer, 180.0),
     }
 
-    print("🏔️  Loading DEM from STAC (raster fallback) …")
+    log.info("[DEM] Loading from STAC (raster fallback)")
 
     dem_ds = _load_from_planetary_computer(dem_bbox, resolution)
 
     if dem_ds is None:
-        print("   ⚠️  Planetary Computer unavailable, trying openlandmap …")
+        log.warning("Planetary Computer unavailable, trying openlandmap")
         dem_ds = _load_from_openlandmap(dem_bbox, resolution)
 
     dem = dem_ds["data"].squeeze()
@@ -154,10 +161,12 @@ def load_dem(bbox: dict = BBOX, resolution: float | None = None) -> dict:
 
     tpi = elev_gpu - _ndi.uniform_filter(elev_gpu, size=5, mode="nearest")
 
-    print(
-        f"   ✅ DEM {elev_gpu.shape}  "
-        f"elev {float(_xp.min(elev_gpu)):.0f}–{float(_xp.max(elev_gpu)):.0f} m  "
-        f"slope max {float(_xp.max(slope)):.1f}°"
+    log.info(
+        "[DEM] %s  elev %.0f-%.0f m  slope max %.1f deg",
+        elev_gpu.shape,
+        float(_xp.min(elev_gpu)),
+        float(_xp.max(elev_gpu)),
+        float(_xp.max(slope)),
     )
 
     return {
@@ -207,7 +216,7 @@ def _load_from_planetary_computer(bbox: dict, resolution: float):
             bbox=[bbox["min_lon"], bbox["min_lat"], bbox["max_lon"], bbox["max_lat"]],
         )
     except Exception as e:
-        print(f"   ⚠️  Planetary Computer error: {e}")
+        log.warning("Planetary Computer error: %s", e)
         return None
 
 
