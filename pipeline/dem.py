@@ -34,7 +34,7 @@ def load_dem_parquet(h3_res: int, h3_df: pd.DataFrame) -> dict | None:
     if h3_res > DEM_PARQUET_MAX_RES:
         return None
 
-    url = f"{DEM_PARQUET_BASE}/h3_res={h3_res}/data.parquet"
+    url = f"{DEM_PARQUET_BASE}/h3/h3_res={h3_res}/data.parquet"
     log.info("[DEM] Loading from Parquet (H3 res %d)", h3_res)
 
     try:

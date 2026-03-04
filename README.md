@@ -1,13 +1,3 @@
----
-title: walkthru-weather-index
-emoji: "\U0001F326"
-colorFrom: blue
-colorTo: green
-sdk: docker
-app_port: 7860
-license: cc-by-4.0
----
-
 # walkthru-weather-index
 
 **Event-driven weather downscaling pipeline**
@@ -136,7 +126,7 @@ Configure in `pipeline/config.py` > `H3_RESOLUTIONS` or via `--h3-resolutions 5`
 Pre-computed H3-indexed terrain from [walkthru-earth/dem-terrain](https://github.com/walkthru-earth/dem-terrain), hosted on [Source Cooperative](https://source.coop/walkthru-earth/dem-terrain) (public, no auth):
 
 ```
-s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain/h3_res={res}/data.parquet
+s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain/h3/h3_res={res}/data.parquet
 ```
 
 Columns: `h3_index`, `elev`, `slope`, `aspect`, `tri`, `tpi`. Resolutions 1--7 available.
@@ -158,6 +148,18 @@ Fallback sources (for res > 7 or with `--no-parquet-dem`):
 | [Scientific Review](docs/scientific-review.md) | Scientific audit of all calculations against recent literature |
 | [Global DEM Strategy](docs/global-dem-strategy.md) | Design rationale for H3 GeoParquet terrain approach |
 
+## Sources
+
+**Weather**: [NOAA AI-NWP](https://registry.opendata.aws/noaa-oar-mlwp/) — AI Neural Weather Prediction models hosted on AWS Open Data.
+
+> Lam, R., Sanchez-Gonzalez, A., Willson, M., et al. (2023). Learning skillful medium-range global weather forecasting. *Science*, 382(6677), 1416–1421. [doi:10.1126/science.adi2336](https://doi.org/10.1126/science.adi2336)
+
+**Terrain**: [GEDTM-30m](https://doi.org/10.5281/zenodo.14900181) via [walkthru-earth/dem-terrain](https://github.com/walkthru-earth/dem-terrain).
+
+> Ho, Y., Grohmann, C. H., Lindsay, J., Reuter, H. I., Parente, L., Witjes, M., & Hengl, T. (2025). GEDTM30: global ensemble digital terrain model at 30 m and derived multiscale terrain variables. *PeerJ*, 13, e19673. [doi:10.7717/peerj.19673](https://doi.org/10.7717/peerj.19673)
+
 ## License
 
-[CC BY 4.0](LICENSE)
+This project is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) by [walkthru.earth](https://github.com/walkthru-earth). See [LICENSE](LICENSE) for details. The source [NOAA AI-NWP](https://registry.opendata.aws/noaa-oar-mlwp/) data is public domain (US Government work).
+
+Contact: [hi@walkthru.earth](mailto:hi@walkthru.earth)

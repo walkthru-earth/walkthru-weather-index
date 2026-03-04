@@ -83,7 +83,7 @@ For each configured resolution the module:
 For resolutions 1-7, the pipeline reads pre-computed terrain from [walkthru-earth/dem-terrain](https://github.com/walkthru-earth/dem-terrain):
 
 ```
-s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain/h3_res={res}/data.parquet
+s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain/h3/h3_res={res}/data.parquet
 ```
 
 Each file contains `h3_index, elev, slope, aspect, tri, tpi` already at H3 cell centres. The pipeline joins on `h3_index` to align DEM values with the H3 grid -- no raster loading, no GPU terrain computation, no `RegularGridInterpolator`. This reduces the DEM step from ~30 min to ~5 sec for global runs.

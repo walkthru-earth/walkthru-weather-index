@@ -1,7 +1,7 @@
 [project]
 name = "walkthru-weather-index"
 version = "0.1.0"
-description = "Add your description here"
+description = "NOAA AI-NWP weather forecasts downscaled to H3-indexed GeoParquet"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
