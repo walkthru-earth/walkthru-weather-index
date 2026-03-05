@@ -37,7 +37,7 @@ hf jobs logs -f <job-id>                              # Stream logs live
 
 - **NOAA AI-NWP**: AWS bucket `noaa-oar-mlwp-data` (public). GraphCast_GFS 0.25° global, 6-hourly, NetCDF.
   - Citation: Lam, R. et al. (2023). Learning skillful medium-range global weather forecasting. *Science*, 382(6677), 1416–1421. [doi:10.1126/science.adi2336](https://doi.org/10.1126/science.adi2336)
-- **DEM terrain** (for topo corrections): `s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain/h3/h3_res={res}/data.parquet`
+- **DEM terrain** (for topo corrections): `s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain/v2/h3/h3_res={res}/data.parquet`
   - Source: [walkthru-earth/dem-terrain](https://github.com/walkthru-earth/dem-terrain). GEDTM-30m, res 1–10.
   - Citation: Ho, Y. et al. (2025). GEDTM30. *PeerJ*, 13, e19673. [doi:10.7717/peerj.19673](https://doi.org/10.7717/peerj.19673)
 - **Fallback DEM** (res > `DEM_PARQUET_MAX_RES` or `--no-parquet-dem`): Copernicus GLO-30 via Planetary Computer STAC (`https://planetarycomputer.microsoft.com/api/stac/v1`)
@@ -59,8 +59,12 @@ s3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/
   model=GraphCast_GFS/
     date=YYYY-MM-DD/
       hour={0,12}/
-        h3_res=5/
-          part-0.parquet .. part-84.parquet    ~3.6 GB per forecast run
+        h3_res=0/data.parquet      ~103 KB
+        h3_res=1/data.parquet      ~525 KB
+        h3_res=2/data.parquet      ~3.3 MB
+        h3_res=3/data.parquet     ~21.2 MB
+        h3_res=4/data.parquet    ~141.2 MB
+        h3_res=5/data.parquet    ~931.4 MB  (~42M rows per forecast run)
 ```
 
 ## Key design decisions

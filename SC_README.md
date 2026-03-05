@@ -26,7 +26,7 @@ SELECT h3_index,
        timestamp, temperature_2m_C, wind_speed_10m_ms,
        precipitation_mm_6hr, pressure_msl_hPa
 FROM read_parquet(
-    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=0/h3_res=5/data.parquet'
+    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=12/h3_res=5/data.parquet'
 )
 ORDER BY timestamp, temperature_2m_C DESC
 LIMIT 20;
@@ -47,7 +47,7 @@ df = con.sql("""
            h3_cell_to_lng(h3_index) AS lng,
            timestamp, temperature_2m_C, wind_speed_10m_ms, pressure_msl_hPa
     FROM read_parquet(
-        's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=0/h3_res=5/data.parquet'
+        's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=12/h3_res=5/data.parquet'
     )
     WHERE h3_cell_to_lat(h3_index) BETWEEN 20 AND 35
       AND h3_cell_to_lng(h3_index) BETWEEN 68 AND 90
@@ -59,21 +59,17 @@ df = con.sql("""
 ```
 walkthru-earth/indices/weather/
   model=GraphCast_GFS/
-    date=2026-03-04/
-      hour=0/
-        h3_res=5/
-          data.parquet    ~1 GB   42M rows (2M cells × 21 timesteps)
-      hour=12/
-        h3_res=5/
-          data.parquet    ~1 GB
-    date=2026-03-05/
-      hour=0/
-        h3_res=5/
-          data.parquet    ~1 GB
-    ...
+    date=YYYY-MM-DD/
+      hour={0,12}/
+        h3_res=0/data.parquet      ~103 KB     2,562 rows (122 cells × 21 timesteps)
+        h3_res=1/data.parquet      ~525 KB    17,955 rows
+        h3_res=2/data.parquet      ~3.3 MB   112,518 rows
+        h3_res=3/data.parquet     ~21.2 MB   698,901 rows
+        h3_res=4/data.parquet    ~141.2 MB  4,407,816 rows
+        h3_res=5/data.parquet    ~931.4 MB 42,353,682 rows (2M cells × 21 timesteps)
 ```
 
-Each forecast run: **single `data.parquet` file**, ~1 GB, ~42M rows (2,016,842 unique H3 cells × 21 timesteps over 5 days). New forecasts are appended every 12 hours. Compression: ZSTD level 3. Sorted by `h3_index` with 1M-row row groups for efficient range pushdown.
+Six H3 resolutions (0–5) per forecast run. Each is a **single `data.parquet` file**, sorted by `h3_index`. New forecasts are uploaded every 12 hours. Compression: ZSTD level 3, 1M-row row groups for efficient range pushdown.
 
 ## Schema
 
@@ -141,7 +137,7 @@ SELECT h3_index,
        timestamp, temperature_2m_C, wind_speed_10m_ms,
        precipitation_mm_6hr, pressure_msl_hPa
 FROM read_parquet(
-    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=0/h3_res=5/data.parquet'
+    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=12/h3_res=5/data.parquet'
 )
 WHERE h3_cell_to_lat(h3_index) BETWEEN 51.0 AND 52.0
   AND h3_cell_to_lng(h3_index) BETWEEN -0.5 AND 0.5
@@ -154,7 +150,7 @@ SELECT h3_index,
        h3_cell_to_lng(h3_index) AS lng,
        timestamp, wind_shear_magnitude_ms, temp_diff_850hPa_2m_C
 FROM read_parquet(
-    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=0/h3_res=5/data.parquet'
+    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=12/h3_res=5/data.parquet'
 )
 WHERE wind_shear_magnitude_ms > 20
 ORDER BY wind_shear_magnitude_ms DESC
@@ -166,7 +162,7 @@ SELECT h3_index,
        h3_cell_to_lng(h3_index) AS lng,
        timestamp, temperature_2m_C, wind_speed_10m_ms
 FROM read_parquet(
-    'https://data.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=0/h3_res=5/data.parquet'
+    'https://data.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=12/h3_res=5/data.parquet'
 )
 WHERE h3_cell_to_lat(h3_index) BETWEEN 35 AND 45
   AND h3_cell_to_lng(h3_index) BETWEEN -10 AND 5
