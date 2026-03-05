@@ -28,9 +28,9 @@ def _aggregate_dem_to_parent(dem_df: pd.DataFrame, target_res: int) -> pd.DataFr
     import h3
 
     dem_df = dem_df.copy()
-    current_res = h3.get_resolution(dem_df["h3_index"].iloc[0])
+    current_res = h3.get_resolution(h3.int_to_str(int(dem_df["h3_index"].iloc[0])))
     dem_df["parent"] = dem_df["h3_index"].apply(
-        lambda c: h3.cell_to_parent(c, target_res)
+        lambda c: h3.str_to_int(h3.cell_to_parent(h3.int_to_str(int(c)), target_res))
     )
 
     agg = (

@@ -21,7 +21,7 @@ def generate_h3_grid(
     """Generate H3 grids for one or more resolutions.
 
     Returns a dict mapping resolution → DataFrame with columns:
-      h3_index, lat, lon, area_km2, resolution
+      h3_index (int64), lat, lon, resolution
     """
     is_global = (bbox["max_lat"] - bbox["min_lat"]) >= 170 and (
         bbox["max_lon"] - bbox["min_lon"]
@@ -49,9 +49,7 @@ def generate_h3_grid(
         log.info("[H3] res %d: %s cells", res, f"{len(cells):,}")
 
         if not cells:
-            result[res] = pd.DataFrame(
-                columns=["h3_index", "lat", "lon", "area_km2", "resolution"]
-            )
+            result[res] = pd.DataFrame(columns=["h3_index", "lat", "lon", "resolution"])
             continue
 
         # Vectorised lat/lon extraction
@@ -59,14 +57,14 @@ def generate_h3_grid(
         lats = latlng[:, 0]
         lons = latlng[:, 1]
 
-        areas = np.full(len(cells), h3.cell_area(cells[0], "km^2"))
+        # Convert H3 hex strings to int64 for efficient Parquet encoding
+        h3_ints = np.array([int(c, 16) for c in cells], dtype=np.int64)
 
         result[res] = pd.DataFrame(
             {
-                "h3_index": cells,
+                "h3_index": h3_ints,
                 "lat": lats,
                 "lon": lons,
-                "area_km2": areas,
                 "resolution": np.full(len(cells), res, dtype=np.uint8),
             }
         )

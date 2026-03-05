@@ -103,7 +103,7 @@ def _get_duckdb(use_s3: bool) -> duckdb.DuckDBPyConnection:
     log.info("[EXPORT] Initializing DuckDB %s", duckdb.__version__)
     con = duckdb.connect()
 
-    for ext in ("spatial", "httpfs"):
+    for ext in ("httpfs",):
         try:
             con.load_extension(ext)
         except Exception:
@@ -184,9 +184,6 @@ def _merge_to_single_file(
     # Build list of non-weather columns to pass through
     pass_through = [
         "h3_index",
-        "round(lat, 2)::FLOAT AS lat",
-        "round(lon, 2)::FLOAT AS lon",
-        "area_km2",
         "timestamp",
     ]
 
@@ -198,13 +195,12 @@ def _merge_to_single_file(
 
     con.sql(f"""
         COPY (
-            SELECT {select_sql},
-                   ST_Point(round(lon, 2), round(lat, 2))::GEOMETRY('EPSG:4326') AS geometry
+            SELECT {select_sql}
             FROM read_parquet('{glob_pattern}', hive_partitioning=false)
             ORDER BY h3_index
         ) TO '{final_path}'
         (FORMAT PARQUET, COMPRESSION ZSTD, COMPRESSION_LEVEL 3,
-         ROW_GROUP_SIZE 1000000, GEOPARQUET_VERSION 'BOTH')
+         ROW_GROUP_SIZE 1000000)
     """)
 
     elapsed = time.time() - t0
@@ -320,16 +316,7 @@ def write_resolution_to_s3(
     arrays: dict[str, pa.Array] = {}
 
     # Grid metadata: tile N values T times (numpy arrays)
-    arrays["h3_index"] = pa.array(np.tile(h3_df["h3_index"].values, T))
-    arrays["lat"] = pa.array(
-        np.tile(h3_df["lat"].values.astype(np.float32), T), type=pa.float32()
-    )
-    arrays["lon"] = pa.array(
-        np.tile(h3_df["lon"].values.astype(np.float32), T), type=pa.float32()
-    )
-    arrays["area_km2"] = pa.array(
-        np.tile(h3_df["area_km2"].values.astype(np.float32), T), type=pa.float32()
-    )
+    arrays["h3_index"] = pa.array(np.tile(h3_df["h3_index"].values, T), type=pa.int64())
 
     # Timestamps: repeat each timestamp N times
     arrays["timestamp"] = pa.array(
