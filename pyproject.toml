@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.42.59",
     "dask[distributed]>=2026.1.2",
-    "duckdb==1.5.0.dev329",
+    "duckdb==1.5.0.dev332",
     "h3>=4.0",
     "h5netcdf>=1.8.1",
     "h5py>=3.15.1",
