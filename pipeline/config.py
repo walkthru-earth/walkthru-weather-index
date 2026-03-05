@@ -30,8 +30,8 @@ H3_RESOLUTIONS: list[int] = [0, 1, 2, 3, 4, 5]
 # Each resolution has a single data.parquet file sorted by h3_index.
 DEM_PARQUET_BASE = "s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain"
 DEM_PARQUET_REGION = "us-west-2"
-# Resolutions available as pre-computed Parquet (1-7 now, 8-10 coming).
-DEM_PARQUET_MAX_RES = 7
+# Resolutions available as pre-computed Parquet (v2: all 1-10).
+DEM_PARQUET_MAX_RES = 10
 
 # ── NOAA AI-NWP S3 bucket ─────────────────────────────────────────────────────
 S3_BUCKET = "noaa-oar-mlwp-data"

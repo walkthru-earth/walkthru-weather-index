@@ -77,7 +77,7 @@ def load_dem_parquet(h3_res: int, h3_df: pd.DataFrame) -> dict | None:
 
     # Determine which resolution to actually load from S3
     load_res = max(h3_res, DEM_PARQUET_MIN_RES)
-    url = f"{DEM_PARQUET_BASE}/h3/h3_res={load_res}/data.parquet"
+    url = f"{DEM_PARQUET_BASE}/v2/h3/h3_res={load_res}/data.parquet"
     log.info("[DEM] Loading from Parquet (H3 res %d)", load_res)
 
     try:
