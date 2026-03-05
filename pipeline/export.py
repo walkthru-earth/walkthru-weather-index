@@ -371,7 +371,7 @@ def write_resolution_to_s3(
         if use_s3:
             pq.write_table(
                 part,
-                f"s3://{part_path}",
+                part_path,
                 filesystem=filesystem,
                 compression="zstd",
                 compression_level=1,
