@@ -6,7 +6,8 @@ AI-powered weather forecasts from [NOAA AI-NWP](https://registry.opendata.aws/no
 |---|---|
 | **Source** | [NOAA AI-NWP](https://registry.opendata.aws/noaa-oar-mlwp/) GraphCast_GFS, 0.25° global grid, 6-hourly timesteps |
 | **Terrain** | Topographic corrections via [walkthru-earth/dem-terrain](https://source.coop/walkthru-earth/dem-terrain) ([code](https://github.com/walkthru-earth/dem-terrain)) — H3-indexed [GEDTM-30m](https://doi.org/10.5281/zenodo.14900181) elevation, slope, aspect |
-| **Format** | Apache Parquet with native GEOMETRY logical type (DuckDB 1.5), Hive-partitioned |
+| **Format** | Apache Parquet with native GEOMETRY logical type (DuckDB 1.5), Hive-partitioned, single file per partition |
+| **Size** | ~1.3 GB per forecast run (~42M rows), updated every 12 hours |
 | **CRS** | EPSG:4326 (WGS 84) |
 | **Update** | Automated every 12 hours via GitHub Actions + HuggingFace Jobs (A10G GPU) |
 | **License** | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) by [walkthru.earth](https://walkthru.earth/links) |
@@ -24,8 +25,7 @@ SELECT h3_index, lat, lon, timestamp,
        temperature_2m_C, wind_speed_10m_ms, precipitation_mm_6hr,
        pressure_msl_hPa
 FROM read_parquet(
-    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-02/hour=0/h3_res=5/*.parquet',
-    hive_partitioning = true
+    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-04/hour=0/h3_res=5/data.parquet'
 )
 WHERE lat BETWEEN 35 AND 45 AND lon BETWEEN -10 AND 5
 ORDER BY timestamp, temperature_2m_C DESC
@@ -45,8 +45,7 @@ df = con.sql("""
     SELECT h3_index, lat, lon, timestamp,
            temperature_2m_C, wind_speed_10m_ms, pressure_msl_hPa
     FROM read_parquet(
-        's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-02/hour=0/h3_res=5/*.parquet',
-        hive_partitioning = true
+        's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-04/hour=0/h3_res=5/data.parquet'
     ) WHERE lat BETWEEN 20 AND 35 AND lon BETWEEN 68 AND 90
 """).fetchdf()
 ```
@@ -56,21 +55,21 @@ df = con.sql("""
 ```
 walkthru-earth/indices/weather/
   model=GraphCast_GFS/
-    date=2026-03-02/
+    date=2026-03-04/
       hour=0/
         h3_res=5/
-          part-0.parquet .. part-84.parquet    ~3.6 GB   42M rows (2M cells × 21 timesteps)
+          data.parquet    ~1.3 GB   42M rows (2M cells × 21 timesteps)
       hour=12/
         h3_res=5/
-          part-0.parquet .. part-84.parquet    ~3.6 GB
-    date=2026-03-03/
+          data.parquet    ~1.3 GB
+    date=2026-03-05/
       hour=0/
         h3_res=5/
-          part-0.parquet .. part-84.parquet    ~3.6 GB
+          data.parquet    ~1.3 GB
     ...
 ```
 
-Each forecast run: **85 part files**, ~3.6 GB total, ~42M rows (2,016,842 unique H3 cells × 21 timesteps over 5 days). New forecasts are appended every 12 hours. Compression: ZSTD. Sorted by `h3_index`.
+Each forecast run: **single `data.parquet` file**, ~1.3 GB, ~42M rows (2,016,842 unique H3 cells × 21 timesteps over 5 days). New forecasts are appended every 12 hours. Compression: ZSTD level 3. Sorted by `h3_index` with 1M-row row groups for efficient spatial pushdown.
 
 ## Schema
 
@@ -96,35 +95,39 @@ Each forecast run: **85 part files**, ~3.6 GB total, ~42M rows (2,016,842 unique
 
 ### Weather variables — primary (topographically corrected)
 
-| Column | Units | Topographic correction |
-|--------|-------|------------------------|
-| `temperature_2m_C` | °C | Variable lapse rate (derived from T850 − T2m per timestep) |
-| `wind_u_10m_ms` | m/s | Elevation + slope channelling |
-| `wind_v_10m_ms` | m/s | Elevation + slope channelling |
-| `precipitation_mm_6hr` | mm | Dynamic orographic enhancement (wind-direction-aware) |
-| `specific_humidity_gkg` | g/kg | Exponential elevation adjustment (scale height 2 km) |
-| `pressure_msl_hPa` | hPa | None (sea-level reference) |
-| `temperature_850hPa_C` | °C | None (free-atmosphere) |
-| `wind_u_850hPa_ms` | m/s | None (free-atmosphere) |
-| `wind_v_850hPa_ms` | m/s | None (free-atmosphere) |
-| `vertical_velocity_500hPa_Pas` | Pa/s | None (negative = upward motion) |
-| `geopotential_500hPa_m` | m | None (geopotential height) |
+| Column | Units | Precision | Topographic correction |
+|--------|-------|-----------|------------------------|
+| `temperature_2m_C` | °C | 0.1 | Variable lapse rate (derived from T850 − T2m per timestep) |
+| `wind_u_10m_ms` | m/s | 0.1 | Elevation + slope channelling |
+| `wind_v_10m_ms` | m/s | 0.1 | Elevation + slope channelling |
+| `precipitation_mm_6hr` | mm | 0.01 | Dynamic orographic enhancement (wind-direction-aware) |
+| `specific_humidity_gkg` | g/kg | 0.001 | Exponential elevation adjustment (scale height 2 km) |
+| `pressure_msl_hPa` | hPa | 0.1 | None (sea-level reference) |
+| `temperature_850hPa_C` | °C | 0.1 | None (free-atmosphere) |
+| `wind_u_850hPa_ms` | m/s | 0.1 | None (free-atmosphere) |
+| `wind_v_850hPa_ms` | m/s | 0.1 | None (free-atmosphere) |
+| `vertical_velocity_500hPa_Pas` | Pa/s | 0.001 | None (negative = upward motion) |
+| `geopotential_500hPa_m` | m | 0.1 | None (geopotential height) |
 
 ### Weather variables — derived
 
-| Column | Units | Formula |
-|--------|-------|---------|
-| `wind_speed_10m_ms` | m/s | sqrt(u10² + v10²) |
-| `wind_direction_10m_deg` | ° (meteorological) | Direction wind blows *from*, 0° = N |
-| `wind_speed_850hPa_ms` | m/s | sqrt(u850² + v850²) |
-| `wind_direction_850hPa_deg` | ° (meteorological) | Same convention at 850 hPa |
-| `wind_shear_magnitude_ms` | m/s | sqrt((u850−u10)² + (v850−v10)²) |
-| `wind_shear_direction_deg` | ° (meteorological) | Shear vector direction |
-| `temp_diff_850hPa_2m_C` | °C | T850 − T2m (stability indicator) |
-| `moisture_flux_u` | g/kg·m/s | q × u10 |
-| `moisture_flux_v` | g/kg·m/s | q × v10 |
-| `moisture_flux_magnitude` | g/kg·m/s | sqrt((qu)² + (qv)²) |
-| `geopotential_anomaly_500hPa_m` | m | H500 − 5574 (ICAO standard reference) |
+| Column | Units | Precision | Formula |
+|--------|-------|-----------|---------|
+| `wind_speed_10m_ms` | m/s | 0.1 | sqrt(u10² + v10²) |
+| `wind_direction_10m_deg` | ° (meteorological) | 1 | Direction wind blows *from*, 0° = N |
+| `wind_speed_850hPa_ms` | m/s | 0.1 | sqrt(u850² + v850²) |
+| `wind_direction_850hPa_deg` | ° (meteorological) | 1 | Same convention at 850 hPa |
+| `wind_shear_magnitude_ms` | m/s | 0.1 | sqrt((u850−u10)² + (v850−v10)²) |
+| `wind_shear_direction_deg` | ° (meteorological) | 1 | Shear vector direction |
+| `temp_diff_850hPa_2m_C` | °C | 0.1 | T850 − T2m (stability indicator) |
+| `moisture_flux_u` | g/kg·m/s | 0.0001 | q × u10 |
+| `moisture_flux_v` | g/kg·m/s | 0.0001 | q × v10 |
+| `moisture_flux_magnitude` | g/kg·m/s | 0.0001 | sqrt((qu)² + (qv)²) |
+| `geopotential_anomaly_500hPa_m` | m | 0.1 | H500 − 5574 (ICAO standard reference) |
+
+### Precision policy
+
+All weather values are rounded to meteorologically appropriate precision before ZSTD compression. The source data is 0.25° (~28 km) NOAA AI-NWP — sub-decimal digits in the raw interpolated output are numerical noise, not real atmospheric signal. Rounding improves ZSTD compression by ~63% (3.6 GB → 1.3 GB per forecast) while preserving all scientifically meaningful information. Coordinates (`lat`, `lon`) are rounded to 2 decimal places (H3 resolution 5 cells are ~16 km across).
 
 **Sample values** (GraphCast_GFS, 2026-03-02 00Z, hottest cells):
 
@@ -140,8 +143,9 @@ Each forecast run: **85 part files**, ~3.6 GB total, ~42M rows (2,016,842 unique
 2. When a new forecast is detected, a HuggingFace Job is triggered on an A10G GPU
 3. The 0.25° global NetCDF is interpolated onto ~2M H3 cells (resolution 5) using GPU-accelerated bilinear interpolation
 4. Topographic corrections are applied using the [walkthru-earth/dem-terrain](https://source.coop/walkthru-earth/dem-terrain) dataset — H3-indexed terrain derivatives (elevation, slope, aspect, TRI, TPI) computed from the [GEDTM-30m](https://doi.org/10.5281/zenodo.14900181) global DEM. The terrain data is joined by `h3_index` to apply physically-based corrections: variable lapse rates for temperature, slope channelling for wind, and orographic enhancement for precipitation
-5. 21 timesteps (6-hourly, 5-day forecast) are written as Hive-partitioned Parquet to S3
-6. DuckDB spatial adds native GEOMETRY with per-row-group bounding box statistics
+5. Weather values are rounded to meteorologically appropriate precision (e.g. temperature ±0.1 °C, wind ±0.1 m/s, direction ±1°) — this improves ZSTD compression ~63% with zero scientific information loss
+6. All timesteps are merged into a single `data.parquet` per partition, sorted by `h3_index`, with 1M-row row groups
+7. DuckDB 1.5 spatial adds native Parquet 2.11+ GEOMETRY with per-row-group bounding box statistics for efficient spatial filter pushdown
 
 ## More Examples
 
@@ -150,8 +154,7 @@ Each forecast run: **85 part files**, ~3.6 GB total, ~42M rows (2,016,842 unique
 SELECT timestamp, temperature_2m_C, wind_speed_10m_ms,
        precipitation_mm_6hr, pressure_msl_hPa
 FROM read_parquet(
-    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-03/hour=0/h3_res=5/*.parquet',
-    hive_partitioning = true
+    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-04/hour=0/h3_res=5/data.parquet'
 )
 WHERE lat BETWEEN 51.0 AND 52.0 AND lon BETWEEN -0.5 AND 0.5
 ORDER BY timestamp
@@ -161,17 +164,16 @@ LIMIT 100;
 SELECT h3_index, lat, lon, timestamp,
        wind_shear_magnitude_ms, temp_diff_850hPa_2m_C
 FROM read_parquet(
-    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-02/hour=0/h3_res=5/*.parquet',
-    hive_partitioning = true
+    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-04/hour=0/h3_res=5/data.parquet'
 )
 WHERE wind_shear_magnitude_ms > 20
 ORDER BY wind_shear_magnitude_ms DESC
 LIMIT 20;
 
--- DuckDB-WASM (browser) — use HTTPS URL
+-- DuckDB-WASM (browser) — use HTTPS URL (single file, no glob needed)
 SELECT h3_index, timestamp, temperature_2m_C, wind_speed_10m_ms
 FROM read_parquet(
-    'https://data.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-02/hour=0/h3_res=5/part-0.parquet'
+    'https://data.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-04/hour=0/h3_res=5/data.parquet'
 )
 WHERE lat BETWEEN 35 AND 45 AND lon BETWEEN -10 AND 5
 LIMIT 100;
