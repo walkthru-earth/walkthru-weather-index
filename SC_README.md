@@ -1,14 +1,13 @@
 # Global Weather Forecasts (H3-indexed)
 
-AI-powered weather forecasts from [NOAA AI-NWP](https://registry.opendata.aws/noaa-oar-mlwp/) (GraphCast) downscaled to [H3](https://h3geo.org/) hexagonal cells with topographic corrections, in [native Parquet 2.11+ GEOMETRY](https://github.com/apache/parquet-format/blob/master/Geospatial.md) format. Updated automatically every 12 hours, 5-day forecasts at 6-hour intervals, ~2M cells per timestep at H3 resolution 5.
+AI-powered weather forecasts from [NOAA AI-NWP](https://registry.opendata.aws/noaa-oar-mlwp/) (GraphCast) downscaled to [H3](https://h3geo.org/) hexagonal cells with topographic corrections. Updated automatically every 12 hours, 5-day forecasts at 6-hour intervals, ~2M cells per timestep at H3 resolution 5. Coordinates are derivable from `h3_index` via the DuckDB h3 extension.
 
 | | |
 |---|---|
 | **Source** | [NOAA AI-NWP](https://registry.opendata.aws/noaa-oar-mlwp/) GraphCast_GFS, 0.25° global grid, 6-hourly timesteps |
 | **Terrain** | Topographic corrections via [walkthru-earth/dem-terrain](https://source.coop/walkthru-earth/dem-terrain) ([code](https://github.com/walkthru-earth/dem-terrain)) — H3-indexed [GEDTM-30m](https://doi.org/10.5281/zenodo.14900181) elevation, slope, aspect |
-| **Format** | Apache Parquet with native GEOMETRY logical type (DuckDB 1.5), Hive-partitioned, single file per partition |
-| **Size** | ~1.3 GB per forecast run (~42M rows), updated every 12 hours |
-| **CRS** | EPSG:4326 (WGS 84) |
+| **Format** | Apache Parquet, Hive-partitioned, single `data.parquet` per partition |
+| **Size** | ~1 GB per forecast run (~42M rows), updated every 12 hours |
 | **Update** | Automated every 12 hours via GitHub Actions + HuggingFace Jobs (A10G GPU) |
 | **License** | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) by [walkthru.earth](https://walkthru.earth/links) |
 | **Code** | [walkthru-earth/walkthru-weather-index](https://github.com/walkthru-earth/walkthru-weather-index) |
@@ -17,17 +16,18 @@ AI-powered weather forecasts from [NOAA AI-NWP](https://registry.opendata.aws/no
 
 ```sql
 -- DuckDB
-INSTALL spatial; LOAD spatial;
-INSTALL httpfs;  LOAD httpfs;
+INSTALL h3 FROM community; LOAD h3;
+INSTALL httpfs; LOAD httpfs;
 SET s3_region = 'us-west-2';
 
-SELECT h3_index, lat, lon, timestamp,
-       temperature_2m_C, wind_speed_10m_ms, precipitation_mm_6hr,
-       pressure_msl_hPa
+SELECT h3_index,
+       h3_cell_to_lat(h3_index) AS lat,
+       h3_cell_to_lng(h3_index) AS lng,
+       timestamp, temperature_2m_C, wind_speed_10m_ms,
+       precipitation_mm_6hr, pressure_msl_hPa
 FROM read_parquet(
-    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-04/hour=0/h3_res=5/data.parquet'
+    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=0/h3_res=5/data.parquet'
 )
-WHERE lat BETWEEN 35 AND 45 AND lon BETWEEN -10 AND 5
 ORDER BY timestamp, temperature_2m_C DESC
 LIMIT 20;
 ```
@@ -37,16 +37,20 @@ LIMIT 20;
 import duckdb
 
 con = duckdb.connect()
-for ext in ("spatial", "httpfs"):
-    con.install_extension(ext); con.load_extension(ext)
+con.install_extension("h3", repository="community"); con.load_extension("h3")
+con.install_extension("httpfs"); con.load_extension("httpfs")
 con.sql("SET s3_region = 'us-west-2'")
 
 df = con.sql("""
-    SELECT h3_index, lat, lon, timestamp,
-           temperature_2m_C, wind_speed_10m_ms, pressure_msl_hPa
+    SELECT h3_index,
+           h3_cell_to_lat(h3_index) AS lat,
+           h3_cell_to_lng(h3_index) AS lng,
+           timestamp, temperature_2m_C, wind_speed_10m_ms, pressure_msl_hPa
     FROM read_parquet(
-        's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-04/hour=0/h3_res=5/data.parquet'
-    ) WHERE lat BETWEEN 20 AND 35 AND lon BETWEEN 68 AND 90
+        's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=0/h3_res=5/data.parquet'
+    )
+    WHERE h3_cell_to_lat(h3_index) BETWEEN 20 AND 35
+      AND h3_cell_to_lng(h3_index) BETWEEN 68 AND 90
 """).fetchdf()
 ```
 
@@ -58,18 +62,18 @@ walkthru-earth/indices/weather/
     date=2026-03-04/
       hour=0/
         h3_res=5/
-          data.parquet    ~1.3 GB   42M rows (2M cells × 21 timesteps)
+          data.parquet    ~1 GB   42M rows (2M cells × 21 timesteps)
       hour=12/
         h3_res=5/
-          data.parquet    ~1.3 GB
+          data.parquet    ~1 GB
     date=2026-03-05/
       hour=0/
         h3_res=5/
-          data.parquet    ~1.3 GB
+          data.parquet    ~1 GB
     ...
 ```
 
-Each forecast run: **single `data.parquet` file**, ~1.3 GB, ~42M rows (2,016,842 unique H3 cells × 21 timesteps over 5 days). New forecasts are appended every 12 hours. Compression: ZSTD level 3. Sorted by `h3_index` with 1M-row row groups for efficient spatial pushdown.
+Each forecast run: **single `data.parquet` file**, ~1 GB, ~42M rows (2,016,842 unique H3 cells × 21 timesteps over 5 days). New forecasts are appended every 12 hours. Compression: ZSTD level 3. Sorted by `h3_index` with 1M-row row groups for efficient range pushdown.
 
 ## Schema
 
@@ -77,21 +81,10 @@ Each forecast run: **single `data.parquet` file**, ~1.3 GB, ~42M rows (2,016,842
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `h3_index` | VARCHAR | H3 cell ID (hex string) |
-| `geometry` | GEOMETRY | Cell center point (native Parquet 2.11+ GEOMETRY, EPSG:4326) |
-| `lat` | FLOAT | Cell center latitude (degrees) |
-| `lon` | FLOAT | Cell center longitude (degrees) |
-| `area_km2` | FLOAT | H3 cell area (km²) |
+| `h3_index` | BIGINT | H3 cell ID (int64). Use `h3_cell_to_lat(h3_index)` / `h3_cell_to_lng(h3_index)` from the DuckDB h3 extension to derive coordinates |
 | `timestamp` | TIMESTAMPTZ | Forecast valid time (UTC) |
 
-### Partition columns
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `model` | VARCHAR | Model name (e.g. `GraphCast_GFS`) |
-| `date` | DATE | Forecast run start date |
-| `hour` | BIGINT | Forecast run start hour (UTC) |
-| `h3_res` | BIGINT | H3 resolution (currently 5) |
+Partition path components (`model`, `date`, `hour`, `h3_res`) are encoded in the Hive directory path only and are not stored as columns inside the Parquet file.
 
 ### Weather variables — primary (topographically corrected)
 
@@ -127,15 +120,7 @@ Each forecast run: **single `data.parquet` file**, ~1.3 GB, ~42M rows (2,016,842
 
 ### Precision policy
 
-All weather values are rounded to meteorologically appropriate precision before ZSTD compression. The source data is 0.25° (~28 km) NOAA AI-NWP — sub-decimal digits in the raw interpolated output are numerical noise, not real atmospheric signal. Rounding improves ZSTD compression by ~63% (3.6 GB → 1.3 GB per forecast) while preserving all scientifically meaningful information. Coordinates (`lat`, `lon`) are rounded to 2 decimal places (H3 resolution 5 cells are ~16 km across).
-
-**Sample values** (GraphCast_GFS, 2026-03-02 00Z, hottest cells):
-
-| h3_index | lat | lon | temp_C | wind_ms | press_hPa | precip_mm |
-|----------|-----|-----|--------|---------|-----------|-----------|
-| 85becd33fffffff | -28.9 | +143.5 | 33.1 | 8.8 | 1006.3 | 0.00 |
-| 85becd37fffffff | -28.9 | +143.3 | 33.0 | 9.0 | 1006.1 | 0.00 |
-| 85becd23fffffff | -28.8 | +143.3 | 33.0 | 9.1 | 1006.3 | 0.00 |
+All weather values are rounded to meteorologically appropriate precision before ZSTD compression. The source data is 0.25° (~28 km) NOAA AI-NWP — sub-decimal digits in the raw interpolated output are numerical noise, not real atmospheric signal. Rounding improves ZSTD compression by ~63% while preserving all scientifically meaningful information.
 
 ## How It Works
 
@@ -144,46 +129,53 @@ All weather values are rounded to meteorologically appropriate precision before 
 3. The 0.25° global NetCDF is interpolated onto ~2M H3 cells (resolution 5) using GPU-accelerated bilinear interpolation
 4. Topographic corrections are applied using the [walkthru-earth/dem-terrain](https://source.coop/walkthru-earth/dem-terrain) dataset — H3-indexed terrain derivatives (elevation, slope, aspect, TRI, TPI) computed from the [GEDTM-30m](https://doi.org/10.5281/zenodo.14900181) global DEM. The terrain data is joined by `h3_index` to apply physically-based corrections: variable lapse rates for temperature, slope channelling for wind, and orographic enhancement for precipitation
 5. Weather values are rounded to meteorologically appropriate precision (e.g. temperature ±0.1 °C, wind ±0.1 m/s, direction ±1°) — this improves ZSTD compression ~63% with zero scientific information loss
-6. All timesteps are merged into a single `data.parquet` per partition, sorted by `h3_index`, with 1M-row row groups
-7. DuckDB 1.5 spatial adds native Parquet 2.11+ GEOMETRY with per-row-group bounding box statistics for efficient spatial filter pushdown
+6. All timesteps are merged into a single `data.parquet` per partition, sorted by `h3_index`, with 1M-row row groups. `h3_index` is written as BIGINT (int64); coordinates are derivable via the DuckDB h3 extension
 
 ## More Examples
 
 ```sql
 -- Latest 5-day temperature forecast for a city (e.g. London)
-SELECT timestamp, temperature_2m_C, wind_speed_10m_ms,
+SELECT h3_index,
+       h3_cell_to_lat(h3_index) AS lat,
+       h3_cell_to_lng(h3_index) AS lng,
+       timestamp, temperature_2m_C, wind_speed_10m_ms,
        precipitation_mm_6hr, pressure_msl_hPa
 FROM read_parquet(
-    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-04/hour=0/h3_res=5/data.parquet'
+    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=0/h3_res=5/data.parquet'
 )
-WHERE lat BETWEEN 51.0 AND 52.0 AND lon BETWEEN -0.5 AND 0.5
+WHERE h3_cell_to_lat(h3_index) BETWEEN 51.0 AND 52.0
+  AND h3_cell_to_lng(h3_index) BETWEEN -0.5 AND 0.5
 ORDER BY timestamp
 LIMIT 100;
 
 -- Wind shear analysis (severe weather indicator)
-SELECT h3_index, lat, lon, timestamp,
-       wind_shear_magnitude_ms, temp_diff_850hPa_2m_C
+SELECT h3_index,
+       h3_cell_to_lat(h3_index) AS lat,
+       h3_cell_to_lng(h3_index) AS lng,
+       timestamp, wind_shear_magnitude_ms, temp_diff_850hPa_2m_C
 FROM read_parquet(
-    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-04/hour=0/h3_res=5/data.parquet'
+    's3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=0/h3_res=5/data.parquet'
 )
 WHERE wind_shear_magnitude_ms > 20
 ORDER BY wind_shear_magnitude_ms DESC
 LIMIT 20;
 
 -- DuckDB-WASM (browser) — use HTTPS URL (single file, no glob needed)
-SELECT h3_index, timestamp, temperature_2m_C, wind_speed_10m_ms
+SELECT h3_index,
+       h3_cell_to_lat(h3_index) AS lat,
+       h3_cell_to_lng(h3_index) AS lng,
+       timestamp, temperature_2m_C, wind_speed_10m_ms
 FROM read_parquet(
-    'https://data.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-04/hour=0/h3_res=5/data.parquet'
+    'https://data.source.coop/walkthru-earth/indices/weather/model=GraphCast_GFS/date=2026-03-05/hour=0/h3_res=5/data.parquet'
 )
-WHERE lat BETWEEN 35 AND 45 AND lon BETWEEN -10 AND 5
+WHERE h3_cell_to_lat(h3_index) BETWEEN 35 AND 45
+  AND h3_cell_to_lng(h3_index) BETWEEN -10 AND 5
 LIMIT 100;
 ```
 
-## Geometry Format
+## Note on Schema Changes
 
-The `geometry` column uses the [native Parquet 2.11+ GEOMETRY logical type](https://github.com/apache/parquet-format/blob/master/Geospatial.md) with GeoParquet 1.0 file-level metadata for backwards compatibility (`GEOPARQUET_VERSION 'BOTH'`). DuckDB 1.5+ writes per-row-group bounding box statistics automatically.
-
-Supported by: DuckDB 1.5+, Apache Arrow (Rust), Apache Iceberg, GDAL 3.12+.
+Forecasts produced from March 2026 onward use the lean schema described above: `h3_index` is BIGINT (int64) and geometry/lat/lon/area_km2 columns are omitted. Older forecasts may still contain the previous schema with VARCHAR hex h3_index, geometry, lat, lon, and area_km2 columns.
 
 ## Sources
 

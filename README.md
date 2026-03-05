@@ -66,7 +66,7 @@ Go to **Settings > Secrets and variables > Actions** on the GitHub repo and add:
 | `AWS_SECRET_ACCESS_KEY` | Output S3 bucket credentials |
 | `AWS_DEFAULT_REGION` | e.g. `us-east-1` |
 | `S3_BUCKET` | Bare bucket name (no `s3://`, no trailing `/`) |
-| `S3_PREFIX` | Key prefix inside the bucket (e.g. `indices/v1`); leave empty for bucket root |
+| `S3_PREFIX` | Key prefix inside the bucket (e.g. `walkthru-earth/indices`); leave empty for bucket root |
 
 ### 2. HuggingFace repo
 
@@ -102,10 +102,14 @@ s3://{S3_BUCKET}/{S3_PREFIX}/weather/
         h3_res=2/data.parquet
         h3_res=3/data.parquet
         h3_res=4/data.parquet
-        h3_res=5/data.parquet    ~1.3 GB (42M rows)
+        h3_res=5/data.parquet    ~1 GB (42M rows)
 ```
 
-Single sorted `data.parquet` per partition. Compression: ZSTD level 3. Row groups: 1M rows. Weather values rounded to meteorologically appropriate precision (~63% smaller than raw float32). Native Parquet 2.11+ GEOMETRY with per-row-group bounding box stats.
+Single sorted `data.parquet` per partition. Compression: ZSTD level 3. Row groups: 1M rows. Weather values rounded to meteorologically appropriate precision (~63% smaller than raw float32).
+
+**Schema versions:**
+- **Current (March 2026+):** `h3_index` is BIGINT (int64), no `geometry`/`lat`/`lon`/`area_km2` columns. Coordinates derivable via DuckDB h3 extension (`h3_cell_to_lat()`, `h3_cell_to_lng()`). 23 columns total.
+- **Legacy (pre-March 2026):** `h3_index` was VARCHAR (hex string) with `geometry`, `lat`, `lon`, `area_km2` columns and multiple `part-*.parquet` files per partition. Old files may still exist on S3 for dates before the schema change.
 
 When `S3_PREFIX` is empty, files land directly at `s3://{bucket}/weather/...`.
 
@@ -138,10 +142,10 @@ Configure in `pipeline/config.py` > `H3_RESOLUTIONS` or via `--h3-resolutions 5`
 Pre-computed H3-indexed terrain from [walkthru-earth/dem-terrain](https://github.com/walkthru-earth/dem-terrain), hosted on [Source Cooperative](https://source.coop/walkthru-earth/dem-terrain) (public, no auth):
 
 ```
-s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain/h3/h3_res={res}/data.parquet
+s3://us-west-2.opendata.source.coop/walkthru-earth/dem-terrain/v2/h3/h3_res={res}/data.parquet
 ```
 
-Columns: `h3_index`, `elev`, `slope`, `aspect`, `tri`, `tpi`. Resolutions 1--7 available.
+v2 schema: `h3_index` (BIGINT), `elev`, `slope`, `aspect`, `tri`, `tpi` (all FLOAT). Resolutions 1--10 available.
 
 Fallback sources (for res > 7 or with `--no-parquet-dem`):
 
