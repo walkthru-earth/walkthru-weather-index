@@ -70,7 +70,7 @@ cmd = [
     "--model",
     env.get("MODEL_NAME", "GraphCast_GFS"),
     "--h3-resolutions",
-    env.get("H3_RESOLUTIONS", "5"),
+    env.get("H3_RESOLUTIONS", "0,1,2,3,4,5"),
 ]
 if "BBOX" in env:
     cmd += ["--bbox", env["BBOX"]]

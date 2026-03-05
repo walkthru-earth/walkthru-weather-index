@@ -23,6 +23,44 @@ from pipeline.gpu import to_device, to_numpy, xp, xp_ndimage
 log = logging.getLogger(__name__)
 
 
+def _aggregate_dem_to_parent(dem_df: pd.DataFrame, target_res: int) -> pd.DataFrame:
+    """Aggregate DEM data from a finer resolution to a coarser one via H3 parents."""
+    import h3
+
+    dem_df = dem_df.copy()
+    current_res = h3.get_resolution(dem_df["h3_index"].iloc[0])
+    dem_df["parent"] = dem_df["h3_index"].apply(
+        lambda c: h3.cell_to_parent(c, target_res)
+    )
+
+    agg = (
+        dem_df.groupby("parent")
+        .agg(
+            elev=("elev", "mean"),
+            slope=("slope", "mean"),
+            aspect=("aspect", "mean"),
+            tri=("tri", "mean"),
+            tpi=("tpi", "mean"),
+        )
+        .reset_index()
+        .rename(columns={"parent": "h3_index"})
+    )
+
+    log.info(
+        "[DEM] Aggregated res %d -> res %d (%d -> %d cells)",
+        current_res,
+        target_res,
+        len(dem_df),
+        len(agg),
+    )
+    return agg
+
+
+# Minimum resolution available as pre-computed Parquet.
+# For resolutions below this, we load DEM_PARQUET_MIN_RES and aggregate to parents.
+DEM_PARQUET_MIN_RES = 1
+
+
 def load_dem_parquet(h3_res: int, h3_df: pd.DataFrame) -> dict | None:
     """Load pre-computed terrain from H3-indexed Parquet on S3.
 
@@ -30,12 +68,17 @@ def load_dem_parquet(h3_res: int, h3_df: pd.DataFrame) -> dict | None:
     ``h3_native=True`` so downstream code skips RegularGridInterpolator.
 
     Returns None if the resolution is not available as Parquet.
+
+    For resolutions below DEM_PARQUET_MIN_RES, loads the min-res Parquet
+    and aggregates to parent cells.
     """
     if h3_res > DEM_PARQUET_MAX_RES:
         return None
 
-    url = f"{DEM_PARQUET_BASE}/h3/h3_res={h3_res}/data.parquet"
-    log.info("[DEM] Loading from Parquet (H3 res %d)", h3_res)
+    # Determine which resolution to actually load from S3
+    load_res = max(h3_res, DEM_PARQUET_MIN_RES)
+    url = f"{DEM_PARQUET_BASE}/h3/h3_res={load_res}/data.parquet"
+    log.info("[DEM] Loading from Parquet (H3 res %d)", load_res)
 
     try:
         import pyarrow.parquet as pq
@@ -53,6 +96,10 @@ def load_dem_parquet(h3_res: int, h3_df: pd.DataFrame) -> dict | None:
     except Exception as e:
         log.warning("Parquet load failed: %s", e)
         return None
+
+    # Aggregate to coarser resolution if needed
+    if h3_res < load_res:
+        dem_df = _aggregate_dem_to_parent(dem_df, h3_res)
 
     # Join on h3_index to align DEM values with the pipeline's H3 grid
     merged = h3_df[["h3_index"]].merge(dem_df, on="h3_index", how="left")

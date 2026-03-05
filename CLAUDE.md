@@ -69,7 +69,7 @@ s3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/
 - **DEM from Parquet (not STAC)**: `pipeline/dem.py` loads pre-computed H3-indexed terrain from Source Cooperative. Path: `{DEM_PARQUET_BASE}/h3/h3_res={res}/data.parquet`. Falls back to STAC raster for res > `DEM_PARQUET_MAX_RES` or with `--no-parquet-dem`.
 - **H3-native DEM**: When `dem["h3_native"]` is True, `corrections.py` skips `RegularGridInterpolator` entirely -- values are already at cell centers.
 - **Global H3 grids**: `h3_grid.py` uses `h3.uncompact_cells(get_res0_cells(), res)` for global bbox (LatLngPoly can't represent the full globe).
-- **Default resolution**: `[5]` -- max 7 until res 8-10 DEM Parquet files are verified, then bump `DEM_PARQUET_MAX_RES` in `config.py`.
+- **Default resolution**: `[0,1,2,3,4,5]` -- max 7 until res 8-10 DEM Parquet files are verified, then bump `DEM_PARQUET_MAX_RES` in `config.py`. Res 0 uses res 1 DEM aggregated to parent cells.
 - **Progressive writes**: Each resolution is written to S3 immediately after interpolation, so partial results survive failures.
 - **Structured logging**: Uses Python `logging` module throughout (not print). Flushes per record for real-time HF Jobs log streaming.
 - **Native Parquet GEOMETRY**: DuckDB post-processes each Parquet partition with `GEOPARQUET_VERSION 'BOTH'` — writes native Parquet 2.11+ GEOMETRY logical type (per-row-group `geo_types` stats for spatial pushdown) AND GeoParquet 1.0 `geo` metadata for backwards compatibility. `ST_Point(lon, lat)::GEOMETRY('EPSG:4326')`, sorted by `h3_index` for spatial locality.
