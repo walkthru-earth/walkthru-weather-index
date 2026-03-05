@@ -1,3 +1,12 @@
+---
+title: walkthru-weather-index
+emoji: 🌤️
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+---
+
 # walkthru-weather-index
 
 **Event-driven weather downscaling pipeline**
@@ -87,13 +96,16 @@ cp .env.example .env
 ```
 s3://{S3_BUCKET}/{S3_PREFIX}/weather/
   model=GraphCast_GFS/
-    date=2026-01-01/
+    date=2026-03-05/
       hour=0/
-        h3_res=5/
-          part-00000.parquet
+        h3_res=1/data.parquet
+        h3_res=2/data.parquet
+        h3_res=3/data.parquet
+        h3_res=4/data.parquet
+        h3_res=5/data.parquet    ~1.3 GB (42M rows)
 ```
 
-Compression: ZSTD level 3. Row groups: 100k. Statistics enabled for predicate pushdown.
+Single sorted `data.parquet` per partition. Compression: ZSTD level 3. Row groups: 1M rows. Weather values rounded to meteorologically appropriate precision (~63% smaller than raw float32). Native Parquet 2.11+ GEOMETRY with per-row-group bounding box stats.
 
 When `S3_PREFIX` is empty, files land directly at `s3://{bucket}/weather/...`.
 
