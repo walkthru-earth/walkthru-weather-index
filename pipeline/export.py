@@ -303,8 +303,8 @@ def write_resolution_to_s3(
             FROM _raw_weather
             ORDER BY h3_index
         ) TO '{final_path}'
-        (FORMAT PARQUET, COMPRESSION ZSTD, COMPRESSION_LEVEL 3,
-         ROW_GROUP_SIZE 1000000)
+        (FORMAT PARQUET, PARQUET_VERSION v2, COMPRESSION ZSTD,
+         COMPRESSION_LEVEL 3, ROW_GROUP_SIZE 1000000)
     """)
     con.unregister("_raw_weather")
 
@@ -510,7 +510,7 @@ def aggregate_resolutions(
                 ORDER BY h3_index, timestamp
             ) TO '{out_path}'
             (FORMAT PARQUET, COMPRESSION ZSTD, COMPRESSION_LEVEL 3,
-             ROW_GROUP_SIZE 1000000)
+             PARQUET_VERSION v2, ROW_GROUP_SIZE 1000000)
         """)
 
         elapsed = time.time() - t0
