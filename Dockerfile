@@ -32,7 +32,7 @@ COPY pipeline/ ./pipeline/
 COPY main.py ./
 
 # Pre-install DuckDB extensions (cached in image, no download at runtime)
-RUN uv run python -c "import duckdb; con = duckdb.connect(); con.install_extension('spatial'); con.install_extension('httpfs'); print('DuckDB extensions installed')"
+RUN uv run python -c "import duckdb; con = duckdb.connect(); con.install_extension('httpfs'); con.install_extension('h3', repository='community'); print('DuckDB extensions installed')"
 
 # Smoke-test imports at build time
 RUN uv run python -c "from pipeline import config, gpu, h3_grid; print('imports OK')"

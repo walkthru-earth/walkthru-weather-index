@@ -221,6 +221,24 @@ def main() -> None:
         # Free memory before next resolution
         del dem, interpolated
 
+    # -- Step 5: Aggregate to coarser resolutions via DuckDB h3 ----------------
+    # Only the finest resolution was interpolated; derive all coarser ones
+    # using h3_cell_to_parent + AVG (aggregate-of-aggregates pattern).
+    finest = max(resolutions)
+    if finest > 1:
+        from pipeline.export import aggregate_resolutions
+
+        log.info("[AGG] Aggregating res %d → 1 via DuckDB h3", finest)
+        aggregate_resolutions(
+            base_dir=base_dir,
+            model_name=args.model,
+            date_str=run_time.strftime("%Y-%m-%d"),
+            hour_int=int(run_time.strftime("%H")),
+            finest_res=finest,
+            coarsest_res=1,
+            use_s3=use_s3,
+        )
+
     uri = f"s3://{base_dir}" if use_s3 else base_dir
     log.info("[DONE] Output: %s", uri)
 

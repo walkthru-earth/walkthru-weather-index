@@ -8,17 +8,18 @@ Partition scheme:
           h3_res={res}/
             data.parquet          (single file, sorted by h3_index)
 
-DuckDB 1.5 writes a single sorted file per partition with native Parquet 2.11+
-GEOMETRY and per-row-group bounding box stats.  This is optimal for DuckDB-WASM
-consumers: one metadata fetch instead of 85 part-file round-trips.
-
-Weather values are rounded to meteorologically appropriate precision before
-writing, which dramatically improves ZSTD compression (~63% smaller) while
-losing no scientifically meaningful information.  The source data (0.25° NOAA
-AI-NWP) already limits effective precision.
-
-The S3_PREFIX env var (or --s3-prefix CLI arg) controls the key prefix inside the
-bucket.  Set it when IAM credentials are scoped to a specific prefix.
+OPTIMIZATION STRATEGY (DuckDB 1.5):
+  1. Finest resolution (res 8): Python interpolation → DuckDB direct write
+     (register PyArrow table → round + sort → COPY TO parquet in one step,
+     no intermediate part files)
+  2. Coarser resolutions (7→1): DuckDB h3 aggregate-of-aggregates rollup
+     using h3_cell_to_parent + AVG per (h3_parent, timestamp) group
+  3. Vector quantities (wind, moisture flux): avg u/v components, then
+     recompute speed/direction/magnitude for physical correctness
+  4. preserve_insertion_order=false for memory-efficient GROUP BY
+  5. temp_directory set for out-of-core spilling on large datasets
+  6. Weather values rounded to meteorologically appropriate precision
+     (~63% better ZSTD compression, no scientific information loss)
 """
 
 from __future__ import annotations
@@ -38,7 +39,6 @@ log = logging.getLogger(__name__)
 
 # Module-level lazy DuckDB connection (one per process).
 _duckdb_con: duckdb.DuckDBPyConnection | None = None
-
 
 _COLUMN_MAP = {
     "temperature_2m": "temperature_2m_C",
@@ -69,39 +69,73 @@ _COLUMN_MAP = {
 # AI-NWP — sub-decimal precision is interpolation noise, not real signal.
 # Rounding lets ZSTD compress ~63% better without any scientific information loss.
 _ROUND_DECIMALS: dict[str, int] = {
-    "temperature_2m_C": 1,  # 0.1 °C
-    "temperature_850hPa_C": 1,  # 0.1 °C
-    "temp_diff_850hPa_2m_C": 1,  # 0.1 °C
-    "wind_speed_10m_ms": 1,  # 0.1 m/s
-    "wind_direction_10m_deg": 0,  # 1°
-    "wind_speed_850hPa_ms": 1,  # 0.1 m/s
-    "wind_direction_850hPa_deg": 0,  # 1°
-    "wind_shear_magnitude_ms": 1,  # 0.1 m/s
-    "wind_shear_direction_deg": 0,  # 1°
-    "wind_u_10m_ms": 1,  # 0.1 m/s
-    "wind_v_10m_ms": 1,  # 0.1 m/s
-    "wind_u_850hPa_ms": 1,  # 0.1 m/s
-    "wind_v_850hPa_ms": 1,  # 0.1 m/s
-    "specific_humidity_gkg": 3,  # 0.001 g/kg
-    "moisture_flux_magnitude": 4,  # 0.0001
-    "moisture_flux_u": 4,  # 0.0001
-    "moisture_flux_v": 4,  # 0.0001
-    "pressure_msl_hPa": 1,  # 0.1 hPa
-    "precipitation_mm_6hr": 2,  # 0.01 mm
-    "vertical_velocity_500hPa_Pas": 3,  # 0.001 Pa/s
-    "geopotential_500hPa_m": 1,  # 0.1 m
-    "geopotential_anomaly_500hPa_m": 1,  # 0.1 m
+    "temperature_2m_C": 1,
+    "temperature_850hPa_C": 1,
+    "temp_diff_850hPa_2m_C": 1,
+    "wind_speed_10m_ms": 1,
+    "wind_direction_10m_deg": 0,
+    "wind_speed_850hPa_ms": 1,
+    "wind_direction_850hPa_deg": 0,
+    "wind_shear_magnitude_ms": 1,
+    "wind_shear_direction_deg": 0,
+    "wind_u_10m_ms": 1,
+    "wind_v_10m_ms": 1,
+    "wind_u_850hPa_ms": 1,
+    "wind_v_850hPa_ms": 1,
+    "specific_humidity_gkg": 3,
+    "moisture_flux_magnitude": 4,
+    "moisture_flux_u": 4,
+    "moisture_flux_v": 4,
+    "pressure_msl_hPa": 1,
+    "precipitation_mm_6hr": 2,
+    "vertical_velocity_500hPa_Pas": 3,
+    "geopotential_500hPa_m": 1,
+    "geopotential_anomaly_500hPa_m": 1,
+}
+
+# ── H3 aggregation column specs ─────────────────────────────────────────────
+# Weather uses AVG (intensive properties) unlike places which uses SUM (counts).
+# Vector components are averaged; derived quantities (speed, direction) are
+# recomputed from the averaged components for physical correctness.
+
+# Scalar columns: simple AVG
+_AGG_SCALAR: dict[str, int] = {
+    "temperature_2m_C": 1,
+    "temperature_850hPa_C": 1,
+    "specific_humidity_gkg": 3,
+    "pressure_msl_hPa": 1,
+    "precipitation_mm_6hr": 2,
+    "vertical_velocity_500hPa_Pas": 3,
+    "geopotential_500hPa_m": 1,
+    "geopotential_anomaly_500hPa_m": 1,
+}
+
+# Vector component columns: AVG then recompute derived speed/direction
+_AGG_VECTORS: dict[str, int] = {
+    "wind_u_10m_ms": 1,
+    "wind_v_10m_ms": 1,
+    "wind_u_850hPa_ms": 1,
+    "wind_v_850hPa_ms": 1,
+    "moisture_flux_u": 4,
+    "moisture_flux_v": 4,
 }
 
 
+# ── DuckDB connection ───────────────────────────────────────────────────────
+
+
 def _get_duckdb(use_s3: bool) -> duckdb.DuckDBPyConnection:
-    """Lazy-init a DuckDB connection with spatial + httpfs extensions."""
+    """Lazy-init a DuckDB 1.5 connection with performance settings."""
     global _duckdb_con  # noqa: PLW0603
     if _duckdb_con is not None:
         return _duckdb_con
 
     log.info("[EXPORT] Initializing DuckDB %s", duckdb.__version__)
     con = duckdb.connect()
+
+    # DuckDB 1.5 performance settings
+    con.sql("SET preserve_insertion_order = false")  # memory-efficient GROUP BY
+    con.sql("SET temp_directory = 'duckdb_temp.tmp'")  # out-of-core spilling
 
     for ext in ("httpfs",):
         try:
@@ -126,104 +160,7 @@ def _get_duckdb(use_s3: bool) -> duckdb.DuckDBPyConnection:
     return con
 
 
-def _merge_to_single_file(
-    base_dir: str,
-    model_name: str,
-    date_str: str,
-    hour_int: int,
-    res: int,
-    filesystem: object,
-    use_s3: bool,
-) -> None:
-    """Merge part files into one sorted file with GEOMETRY and rounded values.
-
-    DuckDB reads all part files, rounds weather values to meteorologically
-    appropriate precision (improves ZSTD compression ~63%), adds
-    ST_Point(lon, lat)::GEOMETRY('EPSG:4326'), sorts by h3_index for spatial
-    locality, and writes a single ``data.parquet``.
-
-    Single-file output is optimal for DuckDB-WASM: one HTTP range request for
-    Parquet footer metadata instead of 85 separate fetches.
-    """
-    partition_dir = (
-        f"{base_dir}/model={model_name}/date={date_str}/hour={hour_int}/h3_res={res}"
-    )
-
-    from pyarrow.fs import FileSelector
-
-    try:
-        file_infos = filesystem.get_file_info(FileSelector(partition_dir))
-    except Exception as e:
-        log.warning("[EXPORT] Could not list partition dir %s: %s", partition_dir, e)
-        return
-
-    parquet_files = [
-        fi.path for fi in file_infos if fi.path.endswith(".parquet") and fi.size > 0
-    ]
-    if not parquet_files:
-        log.warning("[EXPORT] No parquet files found in %s", partition_dir)
-        return
-
-    con = _get_duckdb(use_s3)
-    t0 = time.time()
-
-    # Build the glob pattern for all part files
-    if use_s3:
-        glob_pattern = f"s3://{partition_dir}/part-*.parquet"
-        final_path = f"s3://{partition_dir}/data.parquet"
-    else:
-        glob_pattern = f"{partition_dir}/part-*.parquet"
-        final_path = f"{partition_dir}/data.parquet"
-
-    # Build SELECT with rounding for weather columns
-    round_exprs = []
-    for col_name, decimals in _ROUND_DECIMALS.items():
-        round_exprs.append(f"round({col_name}, {decimals})::FLOAT AS {col_name}")
-    round_sql = ",\n                   ".join(round_exprs)
-
-    # Build list of non-weather columns to pass through
-    pass_through = [
-        "h3_index",
-        "timestamp",
-    ]
-
-    select_sql = (
-        ",\n                   ".join(pass_through)
-        + ",\n                   "
-        + round_sql
-    )
-
-    con.sql(f"""
-        COPY (
-            SELECT {select_sql}
-            FROM read_parquet('{glob_pattern}', hive_partitioning=false)
-            ORDER BY h3_index
-        ) TO '{final_path}'
-        (FORMAT PARQUET, COMPRESSION ZSTD, COMPRESSION_LEVEL 3,
-         ROW_GROUP_SIZE 1000000)
-    """)
-
-    elapsed = time.time() - t0
-    log.info(
-        "[EXPORT]   merged + rounded → %s (%.1fs)",
-        final_path.rsplit("/", 1)[-1],
-        elapsed,
-    )
-
-    # Remove original part files
-    for src_path in parquet_files:
-        try:
-            if use_s3:
-                import boto3
-
-                bucket, key = src_path.split("/", 1)
-                boto3.client("s3").delete_object(Bucket=bucket, Key=key)
-            else:
-                Path(src_path).unlink(missing_ok=True)
-        except Exception as e:
-            log.warning("[EXPORT]   failed to remove %s: %s", src_path, e)
-
-    log.info("[EXPORT]   removed %d part files", len(parquet_files))
+# ── Filesystem setup ────────────────────────────────────────────────────────
 
 
 def init_filesystem(
@@ -253,8 +190,6 @@ def init_filesystem(
 
         filesystem = LocalFileSystem()
 
-    # Build base_dir: bucket[/prefix]/weather
-    # PyArrow S3 paths use the form "bucket/key" (no s3:// scheme).
     if use_s3:
         parts = [s3_bucket]
         if s3_prefix:
@@ -262,15 +197,17 @@ def init_filesystem(
         parts.append("weather")
         base_dir = "/".join(parts)
     else:
-        import pathlib
-
         base_dir = "output/weather"
-        pathlib.Path(base_dir).mkdir(parents=True, exist_ok=True)
+        Path(base_dir).mkdir(parents=True, exist_ok=True)
 
     log.info(
-        "[EXPORT] Filesystem ready: %s", f"s3://{base_dir}" if use_s3 else base_dir
+        "[EXPORT] Filesystem ready: %s",
+        f"s3://{base_dir}" if use_s3 else base_dir,
     )
     return filesystem, base_dir, use_s3
+
+
+# ── Finest resolution: DuckDB direct write ──────────────────────────────────
 
 
 def write_resolution_to_s3(
@@ -283,7 +220,13 @@ def write_resolution_to_s3(
     use_s3: bool,
     run_time: datetime | None = None,
 ) -> str | None:
-    """Write a single resolution immediately. Returns the URI written to, or None."""
+    """Write a single resolution via DuckDB direct write (no part files).
+
+    DuckDB 1.5 registers the PyArrow table as a zero-copy view, then writes
+    a single sorted + rounded Parquet file in one COPY TO query.  This
+    replaces the legacy two-step pattern (PyArrow part files → DuckDB merge
+    → cleanup) with a single-pass approach.
+    """
     if not interpolated:
         log.warning("[EXPORT] No data to write for res %d", res)
         return None
@@ -310,26 +253,13 @@ def write_resolution_to_s3(
         f"{total:,}",
     )
 
-    # Build PyArrow arrays directly from numpy to avoid Python list overhead.
-    # Python float objects are 28 bytes each vs 4 bytes in numpy float32.
-    # For 42M rows x 27 float columns, lists would use ~27 GB; numpy uses ~4.5 GB.
+    # Build PyArrow arrays (h3_index + timestamp + weather only, no partition cols)
     arrays: dict[str, pa.Array] = {}
-
-    # Grid metadata: tile N values T times (numpy arrays)
     arrays["h3_index"] = pa.array(np.tile(h3_df["h3_index"].values, T), type=pa.int64())
-
-    # Timestamps: repeat each timestamp N times
     arrays["timestamp"] = pa.array(
         np.repeat(timestamps.values, N), type=pa.timestamp("s", tz="UTC")
     )
 
-    # Partition columns
-    arrays["model"] = pa.array([model_name] * total, type=pa.string())
-    arrays["date"] = pa.array([date_str] * total, type=pa.string())
-    arrays["hour"] = pa.array(np.full(total, hour_int, dtype=np.uint8), type=pa.uint8())
-    arrays["h3_res"] = pa.array(np.full(total, res, dtype=np.uint8), type=pa.uint8())
-
-    # Weather variables: flatten numpy (T, N) -> (T*N,) with zero-copy to PyArrow
     for src_name, out_name in _COLUMN_MAP.items():
         arr = interpolated.get(src_name)
         if arr is None:
@@ -339,39 +269,263 @@ def write_resolution_to_s3(
         )
 
     table = pa.table(arrays)
-    del arrays  # free the dict reference
+    del arrays
 
-    # Write raw part files via PyArrow (fast multipart upload to S3)
+    # DuckDB direct write: register → round + sort → COPY TO parquet
+    con = _get_duckdb(use_s3)
+    con.register("_raw_weather", table)
+
     partition_dir = (
         f"{base_dir}/model={model_name}/date={date_str}/hour={hour_int}/h3_res={res}"
     )
+    s3_pfx = "s3://" if use_s3 else ""
+    final_path = f"{s3_pfx}{partition_dir}/data.parquet"
+
     if not use_s3:
         Path(partition_dir).mkdir(parents=True, exist_ok=True)
 
-    import pyarrow.parquet as pq
-
-    # Write as temporary part files (will be merged by DuckDB)
-    rows_per_part = 500_000
-    for i in range(0, len(table), rows_per_part):
-        part = table.slice(i, min(rows_per_part, len(table) - i))
-        part_path = f"{partition_dir}/part-{i // rows_per_part}.parquet"
-        if use_s3:
-            pq.write_table(
-                part,
-                part_path,
-                filesystem=filesystem,
-                compression="zstd",
-                compression_level=1,
-            )
+    # Dynamic SELECT with rounding (handles models with missing columns)
+    select_parts = ["h3_index", "timestamp"]
+    for col_name in table.column_names:
+        if col_name in ("h3_index", "timestamp"):
+            continue
+        if col_name in _ROUND_DECIMALS:
+            d = _ROUND_DECIMALS[col_name]
+            select_parts.append(f"round({col_name}, {d})::FLOAT AS {col_name}")
         else:
-            pq.write_table(part, part_path, compression="zstd", compression_level=1)
+            select_parts.append(col_name)
+    select_sql = ", ".join(select_parts)
 
-    # DuckDB post-processing: merge all parts into a single sorted file with
-    # rounded values, native GEOMETRY, and per-row-group bounding box stats.
-    _merge_to_single_file(
-        base_dir, model_name, date_str, hour_int, res, filesystem, use_s3
-    )
+    t0 = time.time()
+    con.sql(f"""
+        COPY (
+            SELECT {select_sql}
+            FROM _raw_weather
+            ORDER BY h3_index
+        ) TO '{final_path}'
+        (FORMAT PARQUET, COMPRESSION ZSTD, COMPRESSION_LEVEL 3,
+         ROW_GROUP_SIZE 1000000)
+    """)
+    con.unregister("_raw_weather")
 
+    elapsed = time.time() - t0
     uri = f"s3://{base_dir}" if use_s3 else base_dir
-    log.info("[EXPORT] res %d (%s rows) written to %s", res, f"{len(table):,}", uri)
+    log.info(
+        "[EXPORT] res %d (%s rows) → data.parquet (%.1fs) %s",
+        res,
+        f"{total:,}",
+        elapsed,
+        uri,
+    )
     return uri
+
+
+# ── H3 rollup: aggregate-of-aggregates ──────────────────────────────────────
+
+
+def _build_weather_agg_sql(
+    source_table: str,
+    target_table: str,
+    target_res: int,
+    available_cols: set[str],
+) -> str:
+    """Build CREATE TABLE SQL for weather H3 rollup to coarser resolution.
+
+    Vector quantities (wind, moisture flux) are handled correctly:
+    u/v components are averaged, then speed/direction/magnitude are
+    recomputed from the averaged components (not averaged directly).
+
+    For the aggregate-of-aggregates cascade (res 8→7→6→...→1), each level
+    averages its parent's already-averaged values.  This is exact for H3
+    hexagon parents (7 children each) and < 0.5% off for the 12 pentagon
+    cells — well within the rounding precision of the output.
+    """
+    parts = [
+        f"h3_cell_to_parent(h3_index::UBIGINT, {target_res})::BIGINT AS h3_index",
+        "timestamp",
+    ]
+
+    # Scalar AVGs
+    for col, d in _AGG_SCALAR.items():
+        if col in available_cols:
+            parts.append(f"round(avg({col}), {d})::FLOAT AS {col}")
+
+    # Vector component AVGs
+    for col, d in _AGG_VECTORS.items():
+        if col in available_cols:
+            parts.append(f"round(avg({col}), {d})::FLOAT AS {col}")
+
+    # Derived: temp diff (from averaged base temps)
+    if {"temperature_850hPa_C", "temperature_2m_C"} <= available_cols:
+        parts.append(
+            "round(avg(temperature_850hPa_C) - avg(temperature_2m_C),"
+            " 1)::FLOAT AS temp_diff_850hPa_2m_C"
+        )
+
+    # Derived: wind 10m speed + direction (from averaged u, v)
+    if {"wind_u_10m_ms", "wind_v_10m_ms"} <= available_cols:
+        parts.append(
+            "round(sqrt(avg(wind_u_10m_ms) * avg(wind_u_10m_ms)"
+            " + avg(wind_v_10m_ms) * avg(wind_v_10m_ms)), 1)::FLOAT"
+            " AS wind_speed_10m_ms"
+        )
+        parts.append(
+            "round(((degrees(atan2(-avg(wind_u_10m_ms),"
+            " -avg(wind_v_10m_ms))) + 360) % 360), 0)::FLOAT"
+            " AS wind_direction_10m_deg"
+        )
+
+    # Derived: wind 850hPa speed + direction
+    if {"wind_u_850hPa_ms", "wind_v_850hPa_ms"} <= available_cols:
+        parts.append(
+            "round(sqrt(avg(wind_u_850hPa_ms) * avg(wind_u_850hPa_ms)"
+            " + avg(wind_v_850hPa_ms) * avg(wind_v_850hPa_ms)), 1)::FLOAT"
+            " AS wind_speed_850hPa_ms"
+        )
+        parts.append(
+            "round(((degrees(atan2(-avg(wind_u_850hPa_ms),"
+            " -avg(wind_v_850hPa_ms))) + 360) % 360), 0)::FLOAT"
+            " AS wind_direction_850hPa_deg"
+        )
+
+    # Derived: wind shear (850hPa minus 10m)
+    shear_deps = {
+        "wind_u_850hPa_ms",
+        "wind_v_850hPa_ms",
+        "wind_u_10m_ms",
+        "wind_v_10m_ms",
+    }
+    if shear_deps <= available_cols:
+        parts.append(
+            "round(sqrt("
+            "(avg(wind_u_850hPa_ms) - avg(wind_u_10m_ms))"
+            " * (avg(wind_u_850hPa_ms) - avg(wind_u_10m_ms))"
+            " + (avg(wind_v_850hPa_ms) - avg(wind_v_10m_ms))"
+            " * (avg(wind_v_850hPa_ms) - avg(wind_v_10m_ms))"
+            "), 1)::FLOAT AS wind_shear_magnitude_ms"
+        )
+        parts.append(
+            "round(((degrees(atan2("
+            "-(avg(wind_u_850hPa_ms) - avg(wind_u_10m_ms)),"
+            " -(avg(wind_v_850hPa_ms) - avg(wind_v_10m_ms))"
+            ")) + 360) % 360), 0)::FLOAT AS wind_shear_direction_deg"
+        )
+
+    # Derived: moisture flux magnitude
+    if {"moisture_flux_u", "moisture_flux_v"} <= available_cols:
+        parts.append(
+            "round(sqrt(avg(moisture_flux_u) * avg(moisture_flux_u)"
+            " + avg(moisture_flux_v) * avg(moisture_flux_v)), 4)::FLOAT"
+            " AS moisture_flux_magnitude"
+        )
+
+    select_clause = ",\n        ".join(parts)
+
+    return f"""CREATE OR REPLACE TABLE {target_table} AS
+SELECT
+    {select_clause}
+FROM {source_table}
+GROUP BY 1, 2"""
+
+
+def aggregate_resolutions(
+    base_dir: str,
+    model_name: str,
+    date_str: str,
+    hour_int: int,
+    finest_res: int,
+    coarsest_res: int,
+    use_s3: bool,
+) -> None:
+    """Roll up weather from finest H3 resolution to all coarser resolutions.
+
+    Uses DuckDB h3 extension with aggregate-of-aggregates pattern:
+    compute finest resolution once via Python interpolation, then derive
+    all coarser resolutions by grouping with h3_cell_to_parent.
+
+    OPTIMIZATION (DuckDB 1.5):
+      - preserve_insertion_order=false reduces GROUP BY memory
+      - temp_directory enables out-of-core spilling for large datasets
+      - Each level: CREATE TABLE (no ORDER BY) → COPY TO (ORDER BY for
+        spatial locality + compression) → DROP (free memory)
+      - AVG/sqrt/atan2 all support disk spilling in DuckDB 1.5
+      - Vector components averaged; derived quantities recomputed
+    """
+    con = _get_duckdb(use_s3)
+
+    # Load h3 extension
+    try:
+        con.load_extension("h3")
+    except Exception:
+        con.install_extension("h3", repository="community")
+        con.load_extension("h3")
+    log.info("[AGG] DuckDB h3 extension loaded")
+
+    partition_base = f"{base_dir}/model={model_name}/date={date_str}/hour={hour_int}"
+    s3_pfx = "s3://" if use_s3 else ""
+
+    # Read finest resolution parquet
+    src_path = f"{s3_pfx}{partition_base}/h3_res={finest_res}/data.parquet"
+    log.info("[AGG] Reading res %d: %s", finest_res, src_path)
+
+    # Detect available weather columns from parquet schema
+    schema_rows = con.sql(
+        f"DESCRIBE SELECT * FROM read_parquet('{src_path}')"
+    ).fetchall()
+    available_cols = {row[0] for row in schema_rows}
+    log.info("[AGG] Available columns: %d", len(available_cols))
+
+    # Load finest resolution into DuckDB table
+    con.sql(f"""
+        CREATE OR REPLACE TABLE h3_res{finest_res} AS
+        SELECT * FROM read_parquet('{src_path}')
+    """)
+    row_count = con.sql(f"SELECT count(*) FROM h3_res{finest_res}").fetchone()[0]
+    log.info("[AGG] Loaded res %d: %s rows", finest_res, f"{row_count:,}")
+
+    # Roll up: 8 → 7 → 6 → ... → coarsest_res
+    source_res = finest_res
+    for target_res in range(finest_res - 1, coarsest_res - 1, -1):
+        t0 = time.time()
+
+        # CREATE TABLE with GROUP BY (no ORDER BY — avoid blocking sort)
+        agg_sql = _build_weather_agg_sql(
+            source_table=f"h3_res{source_res}",
+            target_table=f"h3_res{target_res}",
+            target_res=target_res,
+            available_cols=available_cols,
+        )
+        con.sql(agg_sql)
+
+        target_rows = con.sql(f"SELECT count(*) FROM h3_res{target_res}").fetchone()[0]
+
+        # COPY TO parquet (ORDER BY here for spatial locality → better ZSTD)
+        out_path = f"{s3_pfx}{partition_base}/h3_res={target_res}/data.parquet"
+        if not use_s3:
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+
+        con.sql(f"""
+            COPY (
+                SELECT * FROM h3_res{target_res}
+                ORDER BY h3_index, timestamp
+            ) TO '{out_path}'
+            (FORMAT PARQUET, COMPRESSION ZSTD, COMPRESSION_LEVEL 3,
+             ROW_GROUP_SIZE 1000000)
+        """)
+
+        elapsed = time.time() - t0
+        log.info(
+            "[AGG] res %d → %d: %s rows (%.1fs)",
+            source_res,
+            target_res,
+            f"{target_rows:,}",
+            elapsed,
+        )
+
+        # Free memory: drop source table before next iteration
+        con.sql(f"DROP TABLE h3_res{source_res}")
+        source_res = target_res
+
+    # Drop last table
+    con.sql(f"DROP TABLE h3_res{source_res}")
+    log.info("[AGG] All resolutions %d → %d complete", finest_res, coarsest_res)
