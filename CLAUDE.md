@@ -59,7 +59,6 @@ s3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/
   model=GraphCast_GFS/
     date=YYYY-MM-DD/
       hour={0,12}/
-        h3_res=0/data.parquet      ~103 KB
         h3_res=1/data.parquet      ~525 KB
         h3_res=2/data.parquet      ~3.3 MB
         h3_res=3/data.parquet     ~21.2 MB
@@ -73,7 +72,7 @@ s3://us-west-2.opendata.source.coop/walkthru-earth/indices/weather/
 - **DEM from Parquet (not STAC)**: `pipeline/dem.py` loads pre-computed H3-indexed terrain from Source Cooperative. Path: `{DEM_PARQUET_BASE}/v2/h3/h3_res={res}/data.parquet`. Falls back to STAC raster for res > `DEM_PARQUET_MAX_RES` or with `--no-parquet-dem`.
 - **H3-native DEM**: When `dem["h3_native"]` is True, `corrections.py` skips `RegularGridInterpolator` entirely -- values are already at cell centers.
 - **Global H3 grids**: `h3_grid.py` uses `h3.uncompact_cells(get_res0_cells(), res)` for global bbox (LatLngPoly can't represent the full globe).
-- **Default resolution**: `[0,1,2,3,4,5]` -- `DEM_PARQUET_MAX_RES=10` (all resolutions live). Res 0 uses res 1 DEM aggregated to parent cells.
+- **Default resolution**: `[5]` (finest only, coarser derived via aggregate-of-aggregates rollup). `DEM_PARQUET_MAX_RES=10` (all resolutions live).
 - **Progressive writes**: Each resolution is written to S3 immediately after interpolation, so partial results survive failures.
 - **Structured logging**: Uses Python `logging` module throughout (not print). Flushes per record for real-time HF Jobs log streaming.
 - **Lean Parquet output**: DuckDB merges part files into a single sorted `data.parquet` per partition. `h3_index` is BIGINT (int64), no geometry/lat/lon/area_km2 columns. Weather values rounded to meteorologically appropriate precision for ~63% better ZSTD compression. Sorted by `h3_index` for spatial locality and row group pushdown.

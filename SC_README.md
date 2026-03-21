@@ -61,7 +61,6 @@ walkthru-earth/indices/weather/
   model=GraphCast_GFS/
     date=YYYY-MM-DD/
       hour={0,12}/
-        h3_res=0/data.parquet      ~103 KB     2,562 rows (122 cells × 21 timesteps)
         h3_res=1/data.parquet      ~525 KB    17,955 rows
         h3_res=2/data.parquet      ~3.3 MB   112,518 rows
         h3_res=3/data.parquet     ~21.2 MB   698,901 rows
@@ -69,7 +68,7 @@ walkthru-earth/indices/weather/
         h3_res=5/data.parquet    ~931.4 MB 42,353,682 rows (2M cells × 21 timesteps)
 ```
 
-Six H3 resolutions (0–5) per forecast run. Each is a **single `data.parquet` file**, sorted by `h3_index`. New forecasts are uploaded every 12 hours. Compression: ZSTD level 3, 1M-row row groups for efficient range pushdown.
+Five H3 resolutions (1–5) per forecast run. Each is a **single `data.parquet` file**, sorted by `h3_index`. New forecasts are uploaded every 12 hours. Compression: ZSTD level 3, 1M-row row groups for efficient range pushdown.
 
 ## Schema
 
