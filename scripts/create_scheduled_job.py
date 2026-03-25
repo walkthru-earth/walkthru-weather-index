@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 
 HF_TOKEN = os.environ["HF_TOKEN"]
 SPACE_ID = os.environ.get("HF_SPACE_ID", "walkthru-earth/walkthru-weather-index")
+NAMESPACE = SPACE_ID.split("/")[0]
 
 # Build command with S3 args baked in
 cmd = [
@@ -63,6 +64,7 @@ job = create_scheduled_job(
     secrets=secrets,
     env={"PYTHONUNBUFFERED": "1"},
     timeout="2h",
+    namespace=NAMESPACE,
     token=HF_TOKEN,
 )
 
