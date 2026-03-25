@@ -48,13 +48,6 @@ def _s3_base() -> str:
     return f"s3://{OUTPUT_BUCKET}/weather"
 
 
-def _https_base() -> str:
-    """Public HTTPS URL for Source Cooperative."""
-    if OUTPUT_PREFIX:
-        return f"https://data.source.coop/{OUTPUT_PREFIX}/weather"
-    return ""
-
-
 def _geo_metadata() -> dict:
     return {
         "version": "1.1.0",

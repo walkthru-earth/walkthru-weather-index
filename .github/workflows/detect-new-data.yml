@@ -40,9 +40,10 @@ jobs:
           DAYS="${{ inputs.days || '7' }}"
           echo "Scanning last $DAYS days for gaps..."
 
+          # stdout = one NOAA key per line; stderr = log messages (visible in Actions by default)
           MISSING=$(uv run python scripts/detect_gaps.py \
             --days "$DAYS" \
-            --model GraphCast_GFS 2>&1 | tee /dev/stderr | grep -v '^\d\{4\}-' | grep '\.nc$') || true
+            --model GraphCast_GFS) || true
 
           COUNT=$(echo "$MISSING" | grep -c '\.nc$' || echo 0)
           echo "count=$COUNT" >> $GITHUB_OUTPUT

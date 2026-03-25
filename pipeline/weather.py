@@ -9,9 +9,7 @@ import logging
 from pathlib import Path
 
 import xarray as xr
-from botocore import UNSIGNED
-from botocore.config import Config
-import boto3
+from obstore.store import S3Store
 
 from pipeline.config import (
     AI_MODELS,
@@ -22,31 +20,24 @@ from pipeline.config import (
     WEATHER_PADDING,
 )
 
-_UNSIGNED_CFG = Config(signature_version=UNSIGNED)
-
 log = logging.getLogger(__name__)
 
 
-def _s3() -> boto3.client:
-    return boto3.client("s3", config=_UNSIGNED_CFG)
+def _store() -> S3Store:
+    """Public NOAA bucket — no credentials needed."""
+    return S3Store(S3_BUCKET, region="us-east-1", skip_signature=True)
 
 
 def latest_s3_key(model_name: str = "GraphCast_GFS") -> str:
     """Return the S3 key of the most recently modified .nc file for *model_name*."""
     code = AI_MODELS[model_name]["code"]
-    client = _s3()
+    store = _store()
 
-    all_keys: list[tuple] = []  # (LastModified, Key)
-    kwargs: dict = {"Bucket": S3_BUCKET, "Prefix": f"{code}/", "MaxKeys": 1000}
-
-    while True:
-        resp = client.list_objects_v2(**kwargs)
-        for obj in resp.get("Contents", []):
-            if obj["Key"].endswith(".nc"):
-                all_keys.append((obj["LastModified"], obj["Key"]))
-        if not resp.get("IsTruncated"):
-            break
-        kwargs["ContinuationToken"] = resp["NextContinuationToken"]
+    all_keys: list[tuple] = []  # (last_modified, path)
+    for chunk in store.list(prefix=f"{code}/"):
+        for meta in chunk:
+            if meta["path"].endswith(".nc"):
+                all_keys.append((meta["last_modified"], meta["path"]))
 
     if not all_keys:
         raise FileNotFoundError(f"No .nc files found under {code}/ in {S3_BUCKET}")
@@ -80,7 +71,10 @@ def load_weather(
     if not nc_path.exists():
         log.info("[LOAD] Downloading %s", s3_key)
         _evict_old_cache(cache_dir, code)
-        _s3().download_file(S3_BUCKET, s3_key, str(nc_path))
+        result = _store().get(s3_key)
+        with open(nc_path, "wb") as f:
+            for chunk in result.stream(min_chunk_size=8 * 1024 * 1024):
+                f.write(chunk)
         log.info(
             "[LOAD] Saved %s (%s bytes)", nc_path.name, f"{nc_path.stat().st_size:,}"
         )

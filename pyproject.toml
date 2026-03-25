@@ -5,7 +5,6 @@ description = "NOAA AI-NWP weather forecasts downscaled to H3-indexed GeoParquet
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "boto3>=1.42.73",
     "obstore>=0.9.2",
     "duckdb==1.5.1",
     "h3>=4.4.2",

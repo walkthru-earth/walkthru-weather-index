@@ -84,26 +84,11 @@ def list_output_partitions(model: str, days: int) -> set[tuple[str, int]]:
         log.warning("No S3_BUCKET set -- cannot check output, assuming all missing")
         return set()
 
-    # Build store with credentials from env or AWS profile
-    profile = os.environ.get("AWS_PROFILE")
-    if profile:
-        from boto3 import Session as Boto3Session
-
-        from obstore.auth.boto3 import Boto3CredentialProvider
-
-        session = Boto3Session(profile_name=profile)
-        cred = Boto3CredentialProvider(session)
-        store = S3Store(
-            OUTPUT_BUCKET,
-            region=os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
-            credential_provider=cred,
-        )
-    else:
-        # Use env vars (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) picked up natively
-        store = S3Store(
-            OUTPUT_BUCKET,
-            region=os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
-        )
+    # obstore natively picks up AWS env vars and profiles
+    store = S3Store(
+        OUTPUT_BUCKET,
+        region=os.environ.get("AWS_DEFAULT_REGION", "us-west-2"),
+    )
 
     base_parts = [p for p in [OUTPUT_PREFIX, "weather", f"model={model}"] if p]
     base = "/".join(base_parts)
