@@ -198,24 +198,31 @@ def build_catalog(
         item_id = f"{MODEL}-{p['date']}-{p['hour']:02d}z"
         dt_iso = f"{p['date']}T{p['hour']:02d}:00:00+00:00"
         base = _s3_base()
-        https = _https_base()
 
-        # Asset hrefs for each resolution
+        # Asset hrefs for each resolution (3 access methods per resolution)
         assets = {}
         for res in range(1, 6):
-            s3_href = f"{base}/model={MODEL}/date={p['date']}/hour={p['hour']}/h3_res={res}/data.parquet"
-            assets[f"h3_res{res}"] = {
-                "href": s3_href,
+            partition = f"model={MODEL}/date={p['date']}/hour={p['hour']}/h3_res={res}/data.parquet"
+            partition_encoded = partition.replace("=", "%3D")
+
+            # S3 native
+            assets[f"h3_res{res}_s3"] = {
+                "href": f"{base}/{partition}",
                 "type": "application/vnd.apache.parquet",
-                "title": f"H3 resolution {res}",
+                "title": f"H3 resolution {res} (S3)",
             }
-            if https:
-                https_href = f"{https}/model={MODEL}/date={p['date']}/hour={p['hour']}/h3_res={res}/data.parquet"
-                assets[f"h3_res{res}_https"] = {
-                    "href": https_href,
-                    "type": "application/vnd.apache.parquet",
-                    "title": f"H3 resolution {res} (HTTPS)",
-                }
+            # AWS S3 path-style HTTPS (URL-encoded = signs)
+            assets[f"h3_res{res}_s3_https"] = {
+                "href": f"https://s3.us-west-2.amazonaws.com/{OUTPUT_BUCKET}/{OUTPUT_PREFIX}/weather/{partition_encoded}",
+                "type": "application/vnd.apache.parquet",
+                "title": f"H3 resolution {res} (S3 HTTPS)",
+            }
+            # Source Cooperative proxy
+            assets[f"h3_res{res}_source_coop"] = {
+                "href": f"https://data.source.coop/{OUTPUT_PREFIX}/weather/{partition}",
+                "type": "application/vnd.apache.parquet",
+                "title": f"H3 resolution {res} (Source Cooperative)",
+            }
 
         esc_id = item_id.replace("'", "''")
         esc_dt = dt_iso.replace("'", "''")
