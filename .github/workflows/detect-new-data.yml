@@ -45,15 +45,17 @@ jobs:
             --days "$DAYS" \
             --model GraphCast_GFS) || true
 
-          COUNT=$(echo "$MISSING" | grep -c '\.nc$' || echo 0)
+          COUNT=$(echo "$MISSING" | grep -c '\.nc$') || COUNT=0
           echo "count=$COUNT" >> $GITHUB_OUTPUT
 
-          # Save as multiline output
-          {
-            echo "files<<EOF"
-            echo "$MISSING"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+          if [ "$COUNT" -gt 0 ]; then
+            # Save as multiline output (only when there are gaps)
+            {
+              echo "files<<EOF"
+              echo "$MISSING"
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
+          fi
 
           echo "Found $COUNT unprocessed forecast runs"
         env:
@@ -123,3 +125,15 @@ jobs:
             --field model="GraphCast_GFS"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Rebuild STAC catalog (when fully caught up) ─────────────────
+      - name: Build STAC GeoParquet catalog
+        if: steps.gaps.outputs.count == '0'
+        run: |
+          uv run python scripts/build_stac_catalog.py --days 90
+        env:
+          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
+          S3_PREFIX:             ${{ secrets.S3_PREFIX }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION:    ${{ secrets.AWS_DEFAULT_REGION }}
