@@ -95,7 +95,7 @@ The detector runs in ~10 seconds and costs nothing (free GitHub-hosted runners).
 from huggingface_hub import run_job
 
 run_job(
-    image   = "hf.co/spaces/yharby/walkthru-weather-index",
+    image   = "hf.co/spaces/walkthru-earth/walkthru-weather-index",
     command = ["uv", "run", "python", "main.py",
                "--model", "GraphCast_GFS",
                "--h3-resolutions", "5"],
@@ -115,7 +115,7 @@ run_job(
 from huggingface_hub import create_scheduled_job
 
 create_scheduled_job(
-    image    = "hf.co/spaces/yharby/walkthru-weather-index",
+    image    = "hf.co/spaces/walkthru-earth/walkthru-weather-index",
     command  = ["uv", "run", "python", "main.py",
                 "--model", "GraphCast_GFS",
                 "--h3-resolutions", "5"],

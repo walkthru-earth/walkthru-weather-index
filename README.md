@@ -78,11 +78,11 @@ pip install huggingface_hub
 huggingface-cli repo create walkthru-weather-index --type space --space-sdk docker
 
 # Add HF as a second remote and push
-git remote add hf https://huggingface.co/spaces/yharby/walkthru-weather-index
+git remote add hf https://huggingface.co/spaces/walkthru-earth/walkthru-weather-index
 git push hf main
 ```
 
-> **Note:** HF Jobs requires a Pro subscription ($9/month). The `HF_REPO_ID` in the scripts defaults to `yharby/walkthru-weather-index` -- your personal account, since that's where the Pro subscription lives.
+> **Note:** HF Jobs requires a Pro/Enterprise subscription. The `HF_SPACE_ID` in the scripts defaults to `walkthru-earth/walkthru-weather-index`.
 
 ### 3. Local `.env` (for local runs only)
 

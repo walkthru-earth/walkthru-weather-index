@@ -23,7 +23,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 HF_TOKEN = os.environ["HF_TOKEN"]
-SPACE_ID = os.environ.get("HF_SPACE_ID", "yharby/walkthru-weather-index")
+SPACE_ID = os.environ.get("HF_SPACE_ID", "walkthru-earth/walkthru-weather-index")
 
 # Build command with S3 args baked in
 cmd = [
