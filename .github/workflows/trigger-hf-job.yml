@@ -42,7 +42,8 @@ jobs:
         run: uv run python scripts/submit_hf_job.py
         env:
           HF_TOKEN:              ${{ secrets.HF_TOKEN }}
-          HF_SPACE_ID:           "walkthru-earth/walkthru-weather-index"
+          HF_JOB_NAMESPACE:      "walkthru-earth"
+          HF_JOB_IMAGE:          "ghcr.io/walkthru-earth/walkthru-weather-index:latest"
           HF_JOB_FLAVOR:         ${{ inputs.flavor }}
           NOAA_FILE:             ${{ inputs.noaa_file }}
           MODEL_NAME:            ${{ inputs.model }}

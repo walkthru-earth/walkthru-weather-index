@@ -4,7 +4,8 @@ Required env vars:
   HF_TOKEN          -- HuggingFace access token (needs write access)
 
 Optional env vars (forwarded as job secrets/env):
-  HF_SPACE_ID       -- e.g. walkthru-earth/walkthru-weather-index (default)
+  HF_JOB_NAMESPACE  -- org or user namespace for billing (default: walkthru-earth)
+  HF_JOB_IMAGE      -- Docker image (default: ghcr.io/walkthru-earth/walkthru-weather-index:latest)
   HF_JOB_FLAVOR     -- hardware flavor (default: a10g-large)
   NOAA_FILE         -- S3 key of the new .nc file
   MODEL_NAME        -- e.g. GraphCast_GFS
@@ -31,8 +32,10 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 HF_TOKEN = os.environ["HF_TOKEN"]
-SPACE_ID = os.environ.get("HF_SPACE_ID", "walkthru-earth/walkthru-weather-index")
-NAMESPACE = SPACE_ID.split("/")[0]  # org or user that owns the Space
+NAMESPACE = os.environ.get("HF_JOB_NAMESPACE", "walkthru-earth")
+IMAGE = os.environ.get(
+    "HF_JOB_IMAGE", "ghcr.io/walkthru-earth/walkthru-weather-index:latest"
+)
 FLAVOR = os.environ.get("HF_JOB_FLAVOR", "a10g-large")
 
 # Secrets forwarded into the HF container (encrypted at rest by HF)
@@ -83,15 +86,15 @@ if "S3_PREFIX" in secrets:
     cmd += ["--s3-prefix", secrets["S3_PREFIX"]]
 
 log.info("Submitting HF Job")
-log.info("  Space   : %s", SPACE_ID)
+log.info("  Image   : %s", IMAGE)
+log.info("  Namespace: %s", NAMESPACE)
 log.info("  Flavor  : %s", FLAVOR)
 log.info("  Command : %s", " ".join(cmd))
 log.info("  Env     : %s", env)
 log.info("  Secrets : %s", list(secrets.keys()))
 
 job = run_job(
-    # Use the Docker image built from the HF Space
-    image=f"hf.co/spaces/{SPACE_ID}",
+    image=IMAGE,
     command=cmd,
     flavor=FLAVOR,
     secrets=secrets,

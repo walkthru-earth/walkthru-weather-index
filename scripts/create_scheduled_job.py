@@ -23,8 +23,10 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 HF_TOKEN = os.environ["HF_TOKEN"]
-SPACE_ID = os.environ.get("HF_SPACE_ID", "walkthru-earth/walkthru-weather-index")
-NAMESPACE = SPACE_ID.split("/")[0]
+NAMESPACE = os.environ.get("HF_JOB_NAMESPACE", "walkthru-earth")
+IMAGE = os.environ.get(
+    "HF_JOB_IMAGE", "ghcr.io/walkthru-earth/walkthru-weather-index:latest"
+)
 
 # Build command with S3 args baked in
 cmd = [
@@ -57,7 +59,7 @@ secrets = {
 }
 
 job = create_scheduled_job(
-    image=f"hf.co/spaces/{SPACE_ID}",
+    image=IMAGE,
     command=cmd,
     schedule="0 1,13 * * *",  # 01:00 and 13:00 UTC (1h after NOAA 00Z/12Z updates)
     flavor="a10g-large",  # A10G 24 GB, 12 vCPU, 46 GB RAM
