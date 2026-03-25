@@ -7,8 +7,12 @@ on:
     - cron: "15 13 * * *"
   workflow_dispatch:
     inputs:
-      force_run:
-        description: "Force pipeline run even if no new file"
+      days:
+        description: "Look back N days for gaps (default: 7)"
+        type: number
+        default: 7
+      force_latest:
+        description: "Force run for the latest file only (ignore gap check)"
         type: boolean
         default: false
 
@@ -22,49 +26,71 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # AWS CLI is pre-installed on ubuntu-latest -- no extra install needed.
-      # noaa-oar-mlwp-data is a public bucket -- --no-sign-request skips auth.
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
 
-      - name: Find latest GraphCast_GFS file on NOAA S3
-        id: list
+      - name: Install dependencies
+        run: uv sync --no-dev
+
+      # ── Gap detection: compare NOAA source vs output S3 ──────────────
+      - name: Detect unprocessed forecast runs
+        id: gaps
         run: |
-          PREFIX="GRAP_v100_GFS"
+          DAYS="${{ inputs.days || '7' }}"
+          echo "Scanning last $DAYS days for gaps..."
 
-          aws s3 ls "s3://noaa-oar-mlwp-data/${PREFIX}/" \
-            --recursive \
-            --no-sign-request \
-            2>/dev/null \
-            | awk '{print $4}' \
-            | grep '\.nc$' \
-            | sort \
+          MISSING=$(uv run python scripts/detect_gaps.py \
+            --days "$DAYS" \
+            --model GraphCast_GFS 2>&1 | tee /dev/stderr | grep -v '^\d\{4\}-' | grep '\.nc$') || true
+
+          COUNT=$(echo "$MISSING" | grep -c '\.nc$' || echo 0)
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+
+          # Save as multiline output
+          {
+            echo "files<<EOF"
+            echo "$MISSING"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+          echo "Found $COUNT unprocessed forecast runs"
+        env:
+          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
+          S3_PREFIX:             ${{ secrets.S3_PREFIX }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION:    ${{ secrets.AWS_DEFAULT_REGION }}
+
+      # ── Fallback: latest-only mode (original behavior) ───────────────
+      - name: Find latest file (fallback)
+        id: latest
+        if: inputs.force_latest == true || steps.gaps.outputs.count == '0'
+        run: |
+          aws s3 ls "s3://noaa-oar-mlwp-data/GRAP_v100_GFS/" \
+            --recursive --no-sign-request 2>/dev/null \
+            | awk '{print $4}' | grep '\.nc$' | sort \
             > /tmp/current.txt || true
 
           LATEST=$(tail -1 /tmp/current.txt)
           echo "latest=$LATEST" >> $GITHUB_OUTPUT
-          echo "Latest file on S3: $LATEST"
+          echo "Latest: $LATEST"
 
-      - name: Compare with last-seen state
-        id: check
-        run: |
           LAST=$(cat state/noaa-last-seen.txt 2>/dev/null | tr -d '[:space:]')
-          LATEST="${{ steps.list.outputs.latest }}"
-
-          echo "Last seen : '$LAST'"
-          echo "Latest    : '$LATEST'"
-
-          if [ "$LAST" = "$LATEST" ] && [ "${{ inputs.force_run }}" != "true" ]; then
+          if [ "$LAST" = "$LATEST" ] && [ "${{ inputs.force_latest }}" != "true" ]; then
             echo "new=false" >> $GITHUB_OUTPUT
-            echo "No new files -- nothing to do."
           else
-            echo "new=true"         >> $GITHUB_OUTPUT
-            echo "latest=$LATEST"   >> $GITHUB_OUTPUT
-            echo "New file detected: $LATEST"
+            echo "new=true" >> $GITHUB_OUTPUT
           fi
 
+      # ── Update state file ────────────────────────────────────────────
       - name: Update state file
-        if: steps.check.outputs.new == 'true'
+        if: steps.gaps.outputs.count != '0' || steps.latest.outputs.new == 'true'
         run: |
-          echo "${{ steps.check.outputs.latest }}" > state/noaa-last-seen.txt
+          # Use the latest NOAA file as state marker
+          if [ -n "${{ steps.latest.outputs.latest }}" ]; then
+            echo "${{ steps.latest.outputs.latest }}" > state/noaa-last-seen.txt
+          fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add state/noaa-last-seen.txt
@@ -72,11 +98,27 @@ jobs:
           git commit -m "chore: update NOAA last-seen state [skip ci]"
           git push
 
-      - name: Trigger pipeline
-        if: steps.check.outputs.new == 'true'
+      # ── Trigger jobs for ALL gaps ────────────────────────────────────
+      - name: Trigger pipeline for gaps
+        if: steps.gaps.outputs.count != '0'
+        run: |
+          echo "${{ steps.gaps.outputs.files }}" | while IFS= read -r noaa_file; do
+            [ -z "$noaa_file" ] && continue
+            echo "Triggering job for: $noaa_file"
+            gh workflow run trigger-hf-job.yml \
+              --field noaa_file="$noaa_file" \
+              --field model="GraphCast_GFS"
+            sleep 2  # avoid rate limiting
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Fallback: trigger for latest only ────────────────────────────
+      - name: Trigger pipeline (latest only)
+        if: steps.gaps.outputs.count == '0' && steps.latest.outputs.new == 'true'
         run: |
           gh workflow run trigger-hf-job.yml \
-            --field noaa_file="${{ steps.check.outputs.latest }}" \
+            --field noaa_file="${{ steps.latest.outputs.latest }}" \
             --field model="GraphCast_GFS"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

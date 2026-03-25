@@ -20,7 +20,7 @@
  +----------------------------------------------------------------+
  |  HuggingFace Jobs (GPU, pay-per-second)                        |
  |                                                                 |
- |  Image: nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04             |
+ |  Image: ghcr.io/walkthru-earth/walkthru-weather-index:latest   |
  |  Flavor: a10g-large (A10G 24 GB, 12 vCPU, 46 GB RAM)          |
  |                                                                 |
  |  uv run python main.py                                         |
@@ -36,7 +36,7 @@
  |                                                                 |
  |  s3://bucket/weather/                                          |
  |    model=GraphCast_GFS/date=2026-01-01/hour=0/h3_res=5/       |
- |      part-00000.parquet                                        |
+ |      data.parquet                                              |
  +----------------------------------------------------------------+
 ```
 
@@ -50,7 +50,7 @@ NOAA publishes new AI-NWP model output approximately at 00Z and 12Z UTC, but the
 
 ### Detector workflow
 
-The detector (`detect-new-data.yml`) runs twice daily on a free GitHub-hosted runner:
+The detector (`detect-new-data.yml`) runs twice daily on a free GitHub-hosted runner. It compares NOAA source files against processed output on S3 to find gaps (unprocessed runs), covering the last 7 days by default. This catches both new data and failed jobs:
 
 ```
 01:15 UTC  <- ~75 min after NOAA's 00Z target
@@ -76,8 +76,9 @@ The detector runs in ~10 seconds and costs nothing (free GitHub-hosted runners).
 
 ### Requirements
 
-- HuggingFace **PRO** account ($9/month) -- required to use Jobs
-- A write-access HF token (`hf_...`) added to GitHub Secrets as `HF_TOKEN`
+- Pre-paid credits on the `walkthru-earth` HuggingFace org
+- A write-access HF token (`hf_...`) with org permissions, added to GitHub Secrets as `HF_TOKEN`
+- Docker image published to `ghcr.io/walkthru-earth/walkthru-weather-index:latest` (built by `build-image.yml`)
 
 ### Hardware flavors
 
@@ -95,17 +96,18 @@ The detector runs in ~10 seconds and costs nothing (free GitHub-hosted runners).
 from huggingface_hub import run_job
 
 run_job(
-    image   = "hf.co/spaces/walkthru-earth/walkthru-weather-index",
-    command = ["uv", "run", "python", "main.py",
-               "--model", "GraphCast_GFS",
-               "--h3-resolutions", "5"],
-    flavor  = "a10g-large",
-    secrets = {
+    image     = "ghcr.io/walkthru-earth/walkthru-weather-index:latest",
+    command   = ["uv", "run", "python", "main.py",
+                 "--model", "GraphCast_GFS",
+                 "--h3-resolutions", "5"],
+    flavor    = "a10g-large",
+    namespace = "walkthru-earth",
+    secrets   = {
         "AWS_ACCESS_KEY_ID":     "...",
         "AWS_SECRET_ACCESS_KEY": "...",
         "S3_BUCKET":             "my-bucket",
     },
-    timeout = "2h",
+    timeout   = "2h",
 )
 ```
 
@@ -115,14 +117,15 @@ run_job(
 from huggingface_hub import create_scheduled_job
 
 create_scheduled_job(
-    image    = "hf.co/spaces/walkthru-earth/walkthru-weather-index",
-    command  = ["uv", "run", "python", "main.py",
-                "--model", "GraphCast_GFS",
-                "--h3-resolutions", "5"],
-    schedule = "0 1,13 * * *",   # 01:00 and 13:00 UTC daily
-    flavor   = "a10g-large",
-    secrets  = { ... },
-    timeout  = "2h",
+    image     = "ghcr.io/walkthru-earth/walkthru-weather-index:latest",
+    command   = ["uv", "run", "python", "main.py",
+                 "--model", "GraphCast_GFS",
+                 "--h3-resolutions", "5"],
+    schedule  = "0 1,13 * * *",   # 01:00 and 13:00 UTC daily
+    flavor    = "a10g-large",
+    namespace = "walkthru-earth",
+    secrets   = { ... },
+    timeout   = "2h",
 )
 ```
 

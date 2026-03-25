@@ -87,7 +87,8 @@ Separate project at [walkthru-earth/dem-terrain](https://github.com/walkthru-ear
 
 ## Deployment
 
-- **GitHub > HuggingFace**: code is pushed to both remotes. HF Space builds the Docker image only (idle CMD); Jobs override CMD to run the pipeline.
+- **Docker image**: `ghcr.io/walkthru-earth/walkthru-weather-index:latest`, built by `build-image.yml` on push to main. HF Jobs pulls this image directly.
+- **Gap detection**: `detect-new-data.yml` compares NOAA source vs output S3 (last 7 days) and triggers jobs for all missing runs.
 - **Trigger**: `gh workflow run trigger-hf-job.yml` or automatic via detect-new-data.yml schedule.
 - **Partitioning**: `model={name}/date={YYYY-MM-DD}/hour={HH}/h3_res={res}` -- hour is parsed from the NOAA filename init time (e.g. `2026030200` → `hour=0`), not wall-clock.
 - **Hardware**: a10g-large (A10G 24 GB, 12 vCPU, 46 GB RAM), 2h timeout.
@@ -115,11 +116,13 @@ pipeline/
   variables.py                   Variable extraction, unit conversion, derived quantities
   export.py                      Hive-partitioned Parquet > S3
 scripts/
-  submit_hf_job.py               Submit one-shot HF Job
+  submit_hf_job.py               Submit one-shot HF Job (ghcr.io image)
   create_scheduled_job.py        Register recurring HF schedule
+  detect_gaps.py                 Compare NOAA source vs output S3, find missing runs
 .github/workflows/
-  detect-new-data.yml            Poll NOAA S3 every 12h (GraphCast_GFS only)
+  detect-new-data.yml            Detect gaps and trigger jobs for missing runs (every 12h)
   trigger-hf-job.yml             Submit HF Job from GitHub Actions
+  build-image.yml                Build and push Docker image to ghcr.io
 ```
 
 ## License

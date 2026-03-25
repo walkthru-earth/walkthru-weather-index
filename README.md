@@ -72,17 +72,9 @@ Go to **Settings > Secrets and variables > Actions** on the GitHub repo and add:
 
 The pipeline runs on [HuggingFace Jobs](https://huggingface.co/docs/hub/jobs), which pulls code from an HF repo. Push the code there:
 
-```bash
-# Create the HF repo (one-time)
-pip install huggingface_hub
-huggingface-cli repo create walkthru-weather-index --type space --space-sdk docker
+The Docker image is built automatically by GitHub Actions on push to `main` and published to `ghcr.io/walkthru-earth/walkthru-weather-index:latest`. HuggingFace Jobs pulls this image directly.
 
-# Add HF as a second remote and push
-git remote add hf https://huggingface.co/spaces/walkthru-earth/walkthru-weather-index
-git push hf main
-```
-
-> **Note:** HF Jobs requires a Pro/Enterprise subscription. The `HF_SPACE_ID` in the scripts defaults to `walkthru-earth/walkthru-weather-index`.
+> **Note:** HF Jobs requires pre-paid credits on the `walkthru-earth` org. The image and namespace are configured in `scripts/submit_hf_job.py`.
 
 ### 3. Local `.env` (for local runs only)
 

@@ -27,16 +27,19 @@ from pipeline import gpu as _gpu_mod
 log = logging.getLogger(__name__)
 
 
-def _parse_init_time(noaa_file: str | None) -> datetime | None:
+def parse_init_time(filename: str) -> datetime:
     """Extract the forecast initialization time from a NOAA filename.
 
     Example: 'GRAP_v100_GFS_2026030200_f000_f240_06.nc' -> 2026-03-02 00:00 UTC
+
+    Raises ValueError if the filename doesn't contain a valid 10-digit timestamp.
     """
-    if not noaa_file:
-        return None
-    m = re.search(r"(\d{10})", noaa_file)
+    m = re.search(r"(\d{10})", filename)
     if not m:
-        return None
+        raise ValueError(
+            f"Cannot parse init time from filename: {filename!r}. "
+            "Expected 10-digit timestamp (YYYYMMDDhh) in the filename."
+        )
     return datetime.strptime(m.group(1), "%Y%m%d%H").replace(tzinfo=timezone.utc)
 
 
@@ -158,9 +161,9 @@ def main() -> None:
         s3_prefix=args.s3_prefix,
     )
 
-    # Parse forecast init time from the NOAA filename (e.g. "...2026030200_f000...")
-    # so partitions use the model init hour, not wall-clock time.
-    run_time = _parse_init_time(args.noaa_file) or datetime.now(tz=timezone.utc)
+    # Parse forecast init time from the actual downloaded filename — never falls
+    # back to wall-clock time, so partitions always reflect the true model init hour.
+    run_time = parse_init_time(nc_path.name)
 
     # -- Step 4: per-resolution loop: DEM -> interpolate -> write -> free ------
     from pipeline.dem import load_dem, load_dem_parquet
