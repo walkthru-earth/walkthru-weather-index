@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "obstore>=0.9.2",
-    "duckdb==1.5.1",
+    "duckdb==1.5.2",
     "h3>=4.4.2",
     "h5netcdf>=1.8.1",
     "h5py>=3.16.0",
